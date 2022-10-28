@@ -1,0 +1,628 @@
+---
+title: ' Project `r params$proj_number`: `r params$proj_title`' 
+subtitle: 'DS 5494 - Statistical Machine Learning II'
+author: 
+  - Willliam Ofosu Agyapong^[woagyapong@miners.utep.edu]
+  - University of Texas at El Paso (UTEP) 
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  bookdown::pdf_document2:
+    fig_caption: true
+    latex_engine: pdflatex
+    number_sections: true
+    toc: true
+    toc_depth: 4
+header-includes:
+  - \usepackage{amsmath}
+  - \usepackage{amssymb}
+  - \usepackage{amsfonts}
+  - \usepackage{amsthm}
+  - \usepackage{fancyhdr}
+  - \pagestyle{fancy}
+  - \fancyhf{}
+  - \rhead{William O. Agyapong}
+  - \lhead{Project `r params$proj_number` -- `r params$proj_title`}
+  - \cfoot{\thepage}
+  - \usepackage{algorithm}
+  - \usepackage[noend]{algpseudocode}
+geometry: margin = 1in
+fontsize: 11pt
+params:
+  proj_number: III
+  proj_title: Kernel PCA and Association Rules
+---
+
+```{r setup, include=FALSE}
+# Set global options for output rendering
+knitr::opts_chunk$set(eval = T, echo = T, warning = F, message = F, 
+                      fig.align = "center", fig.pos = "H", out.extra = "")
+
+#----------------- Load required packages
+# library(summarytools)
+library(dplyr)
+library(broom)
+library(ggplot2)
+library(knitr)
+# library(corrplot) # correlation plot
+library(patchwork) # interface for laying out plots from ggplot2
+# options(kableExtra.auto_format = F) # disable kableExtra automatic global options
+library(kableExtra)
+library(kernlab)
+  
+#----------------- set the current working directory to this path
+setwd(dirname(rstudioapi::getSourceEditorContext()$path)) 
+
+#-----------------  Set default rounding to 4 decimal places
+options(digits = 4)
+
+#-----------------  Set default ggplot theme
+theme_set(theme_classic())
+
+```
+
+
+
+
+
+<!-- QUESTION ONE: WHAT --> 
+<!-- \noindent\rule{17.5cm}{0.8pt} -->
+
+\newpage
+
+
+# Ordinary PCA versus Kernel PCA
+
+We first import both the training and the test sets which contain optical recognition of handwritten digits.
+
+```{r}
+
+# Import the training set
+train_set <- read.table(file=
+"http://archive.ics.uci.edu/ml/machine-learning-databases/optdigits/optdigits.tra",
+sep=",", header = F, na.strings = c("NA", "", " "),
+col.names = c(paste("I", 1:64, sep=""), "target"))
+
+# Import the test set
+test_set <- read.table(file=
+"http://archive.ics.uci.edu/ml/machine-learning-databases/optdigits/optdigits.tes",
+sep=",", header = F, na.strings = c("NA", "", " "),
+col.names = c(paste("I", 1:64, sep=""), "target"))
+dim(train_set); dim(test_set)
+
+# Combine train and test data for some EDA
+combined_set <- dplyr::bind_rows(train_set, test_set)
+```
+
+The training and testing data have 3823 and 1797 observations, respectively, with 65 number of columns.
+
+
+```{r}
+combined_set %>%
+  slice_sample(n=10) %>%
+  kable(booktabs=T, linesep="", align = "c",
+        caption = "10 random samples from the combined training and test data") %>%
+  kable_styling(latex_options = c("scale_down", "HOLD_position")) %>%
+  kable_classic()
+```
+
+
+## Part (a): Examining the data
+
+We inspected the distinct values in each input variable to determine which ones are unary or close to unary by printing out the number of observations that corresponds to every distinct value for all the input variables, but for conciseness the outputs were not reported. The results clearly revealed inputs 1, and 40 as unary (contain only one values) whiles the inputs 8, 9, 16, 17, 24,25, 32, 33, 41, 48, 49, 56, 57, and 64 were found to be reasonably close to unary (with nearly all values, about 99%, being zeros except a few). These inputs variables shall be removed accordingly.
+
+```{r eval=F}
+cols <- 1:NCOL(train_set)
+for (j in cols){
+  x <- train_set[,j]
+  print(names(train_set)[j])
+  # print(sort(unique(x, incomparables=TRUE)))
+  print(table(x, useNA="ifany"))
+}
+
+# 1, 8, 9, 16, 17, 24,25, 32, 33, 40, 41, 48, 49, 56, 57, 64 (suspect) 
+```
+
+
+```{r}
+output <- NULL
+roles <- c(rep("Input", 64), "Target")
+for(i in seq_along(train_set)) {
+  output <- rbind(output, c(names(train_set)[i],
+                  class(train_set[[i]]),
+                  roles[i],
+                  as.numeric(length(unique(train_set[[i]]))))
+                  )
+}
+
+```
+
+**Checking for distinct and missing values**
+
+```{r}
+# inspecting missing values using the "naniar" package
+as.data.frame(output) %>%
+    bind_cols(naniar::miss_var_summary(combined_set)) %>% 
+    select(-variable, -n_miss) %>%
+  kable(booktabs = T, linesep="", align = "lllcc", longtable=T,
+        col.names = c("Variable", "Data type", "Role", "Distinct values", "Percent missing"),
+        cap = "Amount of distinct and missing values") %>%
+  kable_styling(latex_options = c("HOLD_position","repeat_header")) %>%
+  kable_classic()
+
+```
+
+
+- We do observe that some of the inputs have fewer distinct values. 10 inputs have less than 10 unique values.
+
+- Also, the output suggests that the combined data comprising the train set and test set has no missing values.
+
+
+```{r eval=F, echo=F}
+# Heat Map on the Train Data
+dat1 <- data.matrix(train_set[order(train_set$target), -65])
+n <- NROW(dat1)
+color <- rainbow(n, alpha = 0.8)
+heatmap(dat1, col=color, scale="column", Rowv=NA, Colv=NA,
+labRow=FALSE, margins=c(4,4), xlab="Image Variables", ylab="Samples",
+main="Heatmap of Handwritten Digit Data")
+```
+
+```{r eval=F, echo=F}
+# Heat Map on the Test Data
+dat0 <- data.matrix(test_set[order(test_set$target), -65])
+n <- NROW(dat0)
+color <- rainbow(n, alpha = 0.8)
+heatmap(dat0, col=color, scale="column", Rowv=NA, Colv=NA,
+labRow=FALSE, margins=c(4,4), xlab="Image Variables", ylab="Samples",
+main="Heatmap of Handwritten Digit Data")
+```
+
+
+**Removing unary and close to unary columns**
+
+A total of 16 input variables were removed due to the fact that they had almost all observations coming from a single unique value.
+```{r}
+column_ids <- c(1, 8, 9, 16, 17, 24,25, 32, 33, 40, 41, 48, 49, 56, 57, 64)
+new_train <- train_set[-column_ids]
+new_test <- test_set[-column_ids]
+dim(new_train)
+dim(new_test)
+```
+
+
+## Part (b): Ordinary Principal Component Analysis
+
+
+```{r}
+# excluding target variable 
+train_inputs <- new_train[-ncol(new_train)] # Train
+test_inputs <- new_test[-ncol(new_test)] # Test
+
+```
+
+**Parallel boxplots**
+
+```{r parallel-boxplots, fig.cap="Boxplots of input variables from the training set"}
+train_inputs %>%
+  tidyr::pivot_longer(everything(), names_to="variable", values_to="value") %>%
+  ggplot(aes(variable, value, fill=variable)) +
+  geom_boxplot() +
+  labs(x='Input variables', y='Values') +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
+  
+```
+
+From Figure \@ref(fig:parallel-boxplots), we observe that the input variables show differing range and variations which justifies the standardization of the data as a necessary next step prior to performing the PCA. Thus, we standardize the input variables as follows by first normalizing the inputs from the training set with their respective means and standard deviations and subsequently normalizing the test set with the means and standard deviations computed from the training set: 
+
+```{r}
+# Normalize train inputs
+scaledTrainInputs <- scale(train_inputs)
+scaledTestInputs <- scale(test_inputs, center = attributes(scaledTrainInputs)$`scaled:center`,
+                              scale = attributes(scaledTrainInputs)$`scaled:scale`)
+scaledTrainInputs <- as.data.frame(scaledTrainInputs)
+scaledTestInputs <- as.data.frame(scaledTestInputs)
+```
+
+```{r eval=F, echo=F, parallel-boxplots2, fig.cap="Boxplots of standardized input variables from the training set"}
+scaledTrainInputs %>%
+  tidyr::pivot_longer(everything(), names_to="variable", values_to="value") %>%
+  ggplot(aes(variable, value, fill=variable)) +
+  geom_boxplot() +
+  labs(x='Input variables', y='Values') +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
+  
+```
+
+### Runing the Ordinary PCA
+```{r}
+ord_pca <- prcomp(scaledTrainInputs, retx=TRUE, center=F, scale=F)
+
+# veiw summary of pca results
+# summary(ord_pca)
+```
+
+
+### Variances explained by the ordinary PCs
+
+```{r ord-screeplot, fig.cap="Scree plots depicting the variances (eigenvalues) as well as the proportion of variance explained by the principal components from the ordinary PCA"}
+
+par(mfrow=c(1,2))
+screeplot(ord_pca, type="lines", main = "", npcs = 20, col="skyblue")
+var.pc <- (ord_pca$sdev)^2
+prop.pc <- var.pc/sum(var.pc)
+plot(prop.pc, type='o',
+     ylab="Proportion of variance explained", col="skyblue",
+          xlab="Number of princinpal components")
+```
+
+Looking at the proportion of variance explained from Figure \@ref(fig:ord-screeplot) or the variances, we can see that the first two PCs, relative to the other PCs, explain a great amount of the total variation.
+
+```{r pca-scatterplot, fig.cap="Scatter plot of the first two PCs with the target class variable"}
+pca_scatterplot <- data.frame(ord_pca$x[,1:2], target = train_set$target) %>%
+    mutate(target = as.factor(target)) %>%
+    ggplot(aes(PC1, PC2)) +
+    geom_text(aes(label = target, color=target), show.legend = F) +
+    geom_vline(xintercept = 0, linetype='dashed', color='grey') +
+    geom_hline(yintercept = 0, linetype='dashed', color='grey') +
+    labs(x="1st PC", y="2nd PC")
+pca_scatterplot
+```
+
+Figure \@ref(fig:pca-scatterplot) shows that the first two PCs try to separate the data into the various 10 handwritten digits. The digits, 2, 4, and 6, appear more separated than the others. Different digits clustered together are most likely to be similar to one another than those that are further apart. For example, the digits 2, 3, 5, and 8, may look alike since they have much overlaps. This supports our observation from the screen plots that the first two components contain substantial information from the data.
+
+
+
+## Part (c): Performing Kernel PCA
+
+A polynomial kernel function with degree `1` was chosen to perform the kernel PCA. We were able to arrive at this choice of kernel function after comparing its results to the radial basis kernel function by trying different degrees and sigma values for the polynomial kernel  and radial basis kernel, respectively. The best results from each kernel based on the proportion of variance explained (see figure \@ref(fig:kernpca-screeplot) in this section and figure \@ref(fig:kernpca2-screeplot) in the Appendix) were compared, and the kernel used here emerged the best. 
+
+```{r}
+# kernPCA <- kpca(~., data=scaledTrainInputs, kernel="rbfdot", 
+# 	kpar=list(sigma=0.01), features=ncol(scaledTrainInputs))
+
+kernPCA <- kpca(~., data=scaledTrainInputs, kernel="polydot", 
+	kpar=list(degree=1), features=ncol(scaledTrainInputs))
+```
+
+
+### Variances explained by the kPCs
+
+```{r kernpca-screeplot, fig.cap="Scree plots depicting the variances (eigenvalues) as well as the proportion of variance explained by the principal components from the kernel PCA."}
+sdev <- sqrt(eig(kernPCA))
+names(sdev) <- NULL
+par(mfrow=c(1,2))
+screeplot(list(sdev=sdev), type="lines", main = "", npcs = 20, col="skyblue"
+          )
+
+var.pc <- sdev^2
+prop.pc <- var.pc/sum(var.pc)
+plot(prop.pc, type='o',
+     ylab="Proportion of variance explained", col="skyblue"
+     ,xlab="Number of princinpal components")
+```
+
+Just like in the case of the ordinary PCA, the first two principal components appear to explain a large amount of the total variation.
+
+
+```{r kpca-scatterplot, fig.cap="Scatter plot of the first two kernel PCs with the target class variable"}
+kpcs <- rotated(kernPCA)
+kpca_scatterplot <- data.frame(kpcs[,1:2], target = train_set$target) %>%
+    mutate(target = as.factor(target)) %>%
+    ggplot(aes(X1, X2)) +
+    geom_text(aes(label = target, color=target), show.legend = F) +
+    geom_vline(xintercept = 0, linetype='dashed', color='grey') +
+    geom_hline(yintercept = 0, linetype='dashed', color='grey')+
+    labs(x="1st kPC", y="2nd kPC")
+kpca_scatterplot
+
+```
+
+The scatter plot in figure \@ref(fig:kpca-scatterplot) is just the mirror image of the one for ordinary PCA in figure \@ref(fig:pca-scatterplot). This shows that the results from the two PCA methods are identical. Thus, the observations we made earlier about \@ref(fig:kpca-scatterplot) also hold true here that the two kernel principal components hold a good amount of information from the data.
+
+
+### Comparing kPCA results with the PCA results
+```{r pca-kpca-plot, fig.cap="A graph comparing kPCA results with the ordinary PCA results"}
+p1 <- pca_scatterplot + ggtitle("Results from ordinary PCA")
+p2 <- kpca_scatterplot + ggtitle("Results from kernel PCA")
+p1 + p2
+```
+
+Clearly, we observe that the results obtained does not differ significantly between the two types of PCA methods performed. The two principal components from the two methods appear to hold almost the same amount of information from the data.
+
+## Part (d): Applying the trained PCA and kPCA to the test set
+
+```{r pcapred-scatterplot, fig.cap="Scatter plot of the first two PCs with the target class variable"}
+pca_preds <- predict(ord_pca, scaledTestInputs)
+pcaplot <- pca_scatterplot +  ggtitle("Based on training set")
+pcapred_scatterplot <- data.frame(pca_preds[,1:2], target = test_set$target) %>%
+    mutate(target = as.factor(target)) %>%
+    ggplot(aes(PC1, PC2)) +
+    geom_text(aes(label = target, color=target), show.legend = F) +
+    geom_vline(xintercept = 0, linetype='dashed', color='grey') +
+    geom_hline(yintercept = 0, linetype='dashed', color='grey') +
+    labs(x="1st PC", y="2nd PC", title = "Based on predictions from test set")
+
+pcaplot + pcapred_scatterplot
+```
+
+From figure \@ref(fig:pcapred-scatterplot), except that there are fewer observations in the test set, we can see that the patterns formed by the predicted principal components are identical to the patterns from the trained PCA. This shows how good the results learned from the PCA are. 
+
+```{r kpcapred-scatterplot, fig.cap="Scatter plot of the first two PCs with the target class variable"}
+kpca_preds <- predict(kernPCA, scaledTestInputs)
+kpcaplot <- kpca_scatterplot +  ggtitle("Based on training set")
+kpcapred_scatterplot <- data.frame(kpca_preds[,1:2], target = test_set$target) %>%
+    mutate(target = as.factor(target)) %>%
+    ggplot(aes(X1, X2)) +
+    geom_text(aes(label = target, color=target), show.legend = F) +
+    geom_vline(xintercept = 0, linetype='dashed', color='grey') +
+    geom_hline(yintercept = 0, linetype='dashed', color='grey') +
+    labs(x="1st PC", y="2nd PC", title = "Based on predictions from test set")
+
+kpcaplot + kpcapred_scatterplot
+```
+Similarly, the two plots in figure \@ref(fig:kpcapred-scatterplot) are identical, indicating that the kPCA also did a good job.
+
+# Association Rules
+
+The data used in this section consist of a parsed-version of the King James Bible, with punctuation and stop words removed. You can think of stop words as words such as "the", "a", "is", "are", "be" among others which are so commonly used in a way that they tend to carry very little useful information. As a result, each line is a sentence in the document. Our goal is to ***find words which commonly occur together in sentences***. 
+
+From here forward, we shall simply use the word Bible to refer to the King James version of the Bible.
+
+## Part (a): Importing the data
+
+To begin, we use the R function `read.transactions()` available in the `arules` package to import the data into R as a transaction data type. We set the format to "basket" to be able to perform a **Market Basket Analysis** Association mining. 
+
+```{r eval=T}
+library(arules)
+bible <- read.transactions(file="http://snap.stanford.edu/class/cs246-data/AV1611Bible.txt",
+                           format = "basket", sep =" ", rm.duplicates =F, quote="")
+dim(bible)
+# itemLabels(bible) # making sure that the items were properly separated
+inspect(bible[1:5,])
+```
+
+The output shows that the first sentence in the Bible begins with the word "beginning", not considering stop words.
+
+
+We begin our exploration and analysis by presenting a summary of the entire bible transaction data available to us. This gives us useful information about our transaction object.
+
+```{r}
+summary(bible)
+```
+
+
+There are **31101** transactions which gives us a count of the total number of sentences in the Bible and **12767** items denoting the number of words. Note that the "quote" parameter we specified in the `read.transactions()` function to deal with double/single quotes had the effect of reducing the number of items from 13978 to  the 12767 that we have.
+
+With a density of `0.0009591 `, representing the proportion of non-zero entries, we know that our transaction data is extremely sparse. We learn from this summary output that "**lord**" is the most frequent item with **6667** occurrences, which is about twice the records for the second most frequent item "**thou**". The item "**god**" comes in the third position with **3875** occurrences. We do see that the item set sizes ranges from 2 to 37, with item sets of size 8 as the most prevalent having **2536** occurrences.
+
+## Part (b)
+
+### Item Frequency Analysis
+
+To identify the first and last words with their frequencies, the `itemFrequency()` function with type set to "absolute" was used.
+
+```{r fist-last-items, fig.cap="First 10 versus last 10 items with their absolute frequencies"}
+itemfreq <- itemFrequency(bible, type="absolute")
+first10_items <- head(itemfreq, 10)
+last10_items <- tail(itemfreq, 10)
+
+first10_plt <- data.frame(item = names(first10_items), freq=first10_items) %>%
+  ggplot(aes(item, freq, fill = item)) +
+  geom_bar(stat = "identity",position = "dodge", show.legend=F) +
+  scale_y_continuous(breaks = seq(0, 300, by=50)) +
+  labs(x="Words", y="Absolute frequency", title = "First 10 items") +
+  theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1),
+        plot.title = element_text(hjust = .5))
+
+last10_plt <- data.frame(item = names(last10_items), freq=last10_items) %>%
+  ggplot(aes(item, freq, fill = item)) +
+  geom_bar(stat = "identity",position = "dodge", show.legend=F)  +
+  labs(x="Words", y="Absolute frequency", title = "Last 10 items") +
+  theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1),
+        plot.title = element_text(hjust = .5))
+
+first10_plt + last10_plt
+
+```
+These **absolute frequency** plots present numeric frequencies of each word independently. Looks like our Bible transaction data was sorted in alphabetical order from a - z. Interestingly, all the first 10 words begin with letter "a" while all the last 10 begin with letter "z". Apart from the word "aaron" all the words have very low frequencies; none of the last 10 even went above 10.
+
+Next is a bar graph depicting the top 20 most frequent items. This was obtained by means of the `itemFrequencyPlot()` function available in the `arules` package with **1%** minimum support. The relative frequencies (support) show how many times these words have appeared as compared to others.
+
+```{r absolutefreqplot, fig.cap="Top 20 most frequent words"}
+
+itemFrequencyPlot(bible, type="relative",  topN = 20, support=0.01,
+                  cex.names = 0.8, col="dodgerblue",main="Relative item frequency plot")
+```
+
+Requiring at least 1% support, the word "lord" is the most frequent item from the Bible data under consideration, followed by the words "thou" and "god" with almost the same frequency of occurrences as already observed. The word "son" is the least frequent among the top 20 items. It comes as no surprise for anyone familiar with the Bible to see the words "lord", "god", "israel", and "people" appearing among the most frequent words since a major portion of the Bible concerns the ***God (sometimes refered to as lord)*** of the Bible and his dealings with the ***people*** of ***Israel***. Having a better understanding of the common meanings of these most occurring words, as used in the Bible, would be very beneficial to users and students of the Bible.
+
+
+### Association Rule Analysis
+
+With the help of the **Apriori** algorithm implementation in the `arules` package, we mined association rules from the constructed Bible transaction data using **0.01** minimum support and **0.5** minimum confidence with **5** items as the maximum items in a rule. Varying these parameters, it was observed that a 10% minimum support was too strict to result in zero rules when a 50% minimum confidence was enforced, hence our choice of 1% support with 50% confidence seemed reasonable thresholds resulting in 29 rules for exploration. Note that lowering the support threshold to **0.001** with the same values for the other parameters gave rise to 3566 rules (too many rules).
+
+```{r}
+# obtain the association rules with apriori algorithm
+association_rules <- apriori(bible, parameter = list(support = 0.01, confidence = 0.5, 
+	target = "rules", maxlen=5))
+
+```
+
+
+```{r}
+summary(association_rules)
+```
+
+- Per our configuration settings for the `apriori` algorithm, a total of 29 rules were obtained split between only two item set of sizes 2 and 3, with a very close representation for both (15 rules of size 2 and 14 rules of size 3). 
+
+<!-- A length of 3 items has the most rules of **520** while a length of 6 items have the lowest number of rules of 33. -->
+
+- The support measures are generally very low with the maximum occurring at 3.9% and a minimum of 1.06% (obviously constrained by our minimum threshold).
+
+- We also obtained the highest possible confidence value of 100%.
+
+- With a minimum lift value of 2.52 (greater than 1), there is likely to be some interesting positive associations among the words in the sentences of the Bible. This tells us that the presence of the *antecedents* (lhs) have positive effects on the corresponding *consequence* (rhs) in our document.
+
+
+
+```{r first5-rules}
+# inspect(rules)
+rules_df <- as(association_rules, "data.frame")
+kable(rules_df[1:5,],booktabs=T,linesep ="", caption="First 5 association rules")%>%
+  kable_styling(latex_options = c("HOLD_position")) %>%
+  kable_classic()
+```
+
+```{r last5-rules}
+tail(rules_df, 5) %>%
+  kable(booktabs=T,linesep ="",  caption = "Last 5 association rules") %>%
+  kable_styling(latex_options = c("HOLD_position")) %>%
+  kable_classic()
+```
+
+According to Tables \@ref(tab:first5-rules) and \@ref(tab:last5-rules), we can make the following observations: 
+
+- The first five rules are all of length or size 2 while the last five rules are all of size 3. Among the last five rules, the word "god" is an inevitable part of the antecedents. 
+
+- The last five rules tend to have approximately the same magnitudes of the different association measures, suggesting that those rules appear to carry the same meaning. This makes sense when one considers the fact that "god" and "lord" can be used interchangeably to refer to the the same personality in the Bible, while \underline{thou} is the archaic form of \underline{you} and \underline{thy} is the archaic form of \underline{your}.
+
+- Among the first five rules we observe that 67.76% of the time that the word "answered" is used it is followed by the word "said" and these two words have positive association with lift 5.850. Similarly, the word "thou" mostly comes after the word "art" 98.67% of the time with a positive correlation (lift of 7.907). The rule, \{she\} => \{her\} confirms our English grammar knowledge that the word "she" is the *antecedent* of "her".
+
+- The credibility of the rules generated is somewhat questionable since the rules have fairly large confidence values (at least 50%) and lift values greater than 1, but low levels of support (ranging between 1.06% and 3.9%).  
+
+<!-- - From the rule (answered) => (said) -->
+
+```{r eval=F, echo=F}
+# inspect rules
+inspect(association_rules[1:10])
+quality(association_rules[1:10])
+
+subset(association_rules, subset = size(lhs) + size(rhs) >= 3)
+```
+
+
+## Part (c): The top 5 rules in decreasing order of confidence (conf) for item sets of size 2 or 3
+```{r}
+# get the sizes of each rule
+new_rules_df <- data.frame(matrix(unlist(strsplit(as.character(rules_df$rules), split="=>")), ncol=2, byrow=TRUE))
+colnames(new_rules_df) <- c("LHS", "RHS")# LHS=Left hand side, RHS= Right hand side.
+rule_size <- function(x){length(unlist(strsplit(as.character(x), split=",")))}
+sizes <- apply(new_rules_df, 1, rule_size)
+
+# display the top 5 in decreasing order of confidence
+data.frame(rules_df, size=sizes) %>%
+    filter(size %in% c(2,3)) %>%
+    arrange(desc(confidence)) %>%
+    dplyr::slice_head(n=5) %>%
+  kable(booktabs=T,linesep ="",
+    caption = "top 5 rules in decreasing order of confidence for itemsets of size 2 or 3") %>%
+  kable_styling(latex_options = c("HOLD_position")) %>%
+  kable_classic()
+
+```
+
+- There are two rules of size 2 and three rules of size 3.
+
+- It is not surprising that the first two rules have the same confidence and lift values, and almost the same support. This is because the two rules are basically the same, since \underline{thee} and \underline{thy} are both the archaic forms of \underline{you}. By their confidence values, these two rules imply that in 100% of the sentences where **shall** and **thee/thy** are used together, the word **thou** always follows.
+
+
+
+## Part (d):  Top 5 rules in decreasing order of lift for itemsets of size 2 or 3
+```{r}
+# display the top 5 in decreasing order of lift
+top5_liftrules_df <- data.frame(rules_df, size = sizes) %>%
+    filter(size %in% c(2,3)) %>%
+    arrange(desc(lift)) %>%
+    dplyr::slice_head(n=5)
+
+kable(top5_liftrules_df,booktabs=T,linesep ="", 
+  caption = "top 5 rules in decreasing order of lift for itemsets of size 2 or 3") %>%
+  kable_styling(latex_options = c("HOLD_position")) %>%
+  kable_classic()
+```
+
+- There are three rules of size 2 and two rules of size 3. The top two rules have some meaning even without other supporting words in the sentences where they occurred. 
+
+- Having the highest lift value of **22.183**, the rule \{lord,thus\} => \{saith\} is the rule with the highest strength of correlation or association within the Bible document.
+
+- The rule \{she\} => \{her\} shows up here because there should obviously be high association between their usage based on our grammatical knowledge. It is however surprising that we don't have the rule \{he\} => \{his/him\}.
+
+
+
+## Part (e): Conviction measures for the top 5 rules identified in part (d)
+
+By our own design, the top 5 lift rules in part (d) is a data frame, so we first extract it's corresponding rules object from the entire association rules object that we have and then use the resulting object in the `interestMeasures()` function to obtain the desired conviction measures. We had to remove the sixth observation because there is a tie between the last rule in part (d) and the rule **\{shalt, thy\} =>	\{thou\}** according to their lift values.
+
+
+```{r}
+# subset the corresponding rules object from the entire association rules object
+top5_liftrules <- subset(association_rules, subset = 
+(size(lhs) + size(rhs) %in% top5_liftrules_df$size) & lift %in% top5_liftrules_df$lift) 
+
+top5_liftrules <- sort(top5_liftrules, decreasing = T, by='lift') # to maintain the order
+#inspect(top5_liftrules) # 6 because there is a tie between {shalt, thee} => {thou} and 
+                  # {shalt, thy} =>	{thou}
+conviction <- interestMeasure(top5_liftrules[-6, ], c( "conviction"), transactions=bible)
+
+data.frame(top5_liftrules_df, conviction = conviction) %>%
+  kable(booktabs=T,linesep ="", 
+  caption = "Conviction measures for the top 5 rules identified in part (d)") %>%
+  kable_styling(latex_options = c("HOLD_position")) %>%
+  kable_classic()
+
+```
+
+Just like the lift values, all the conviction values are greater than 1 indicating that these are interesting rules. Note that the conviction for the last rule is $\infty$ (`Inf`) because the confidence value is `1`, signifying logical implication.
+
+
+```{r eval=F, echo=F}
+sorted_bylift <- sort(association_rules, decreasing = T, by='lift')[1:5,] # top lift 5 rules
+inspect(sorted_bylift)
+interestMeasure(sorted_bylift, "conviction", transactions = bible)
+```
+
+
+Finally, we explain how conviction aids in avoiding the problems associated with both the confidence and the lift measures.
+
+As observed by Azevedo and Jorge (2007), conviction is roughly speaking, the best predictive measure of association rules. Unlike confidence, conviction favors low frequency classes and produces different rule orderings. Also, compared to lift, conviction is not a symmetric measure, which means it can account for the significance of rule direction. That is, conviction is capable of discriminating between the strength of the rules A => B and B => A.
+
+
+# Appendix
+
+```{r}
+kernPCA <- kpca(~., data=scaledTrainInputs, kernel="rbfdot",
+	kpar=list(sigma=0.01), features=ncol(scaledTrainInputs))
+```
+
+```{r kernpca2-screeplot, fig.cap="Scree plots depicting the variances (eigenvalues) as well as the proportion of variance explained by the principal components from the kernel PCA with radial basis kernel function."}
+sdev <- sqrt(eig(kernPCA))
+names(sdev) <- NULL
+par(mfrow=c(1,2))
+screeplot(list(sdev=sdev), type="lines", main = "", npcs = 20, col="skyblue")
+
+var.pc <- sdev^2
+prop.pc <- var.pc/sum(var.pc)
+plot(prop.pc, type='o',
+     ylab="Proportion of variance explained", col="skyblue"
+     ,xlab="Number of princinpal components")
+```
+
+# References{-}
+
+- Azevedo, P. J., & Jorge, A. M. (2007, September). Comparing rule measures for predictive association rules. In European Conference on Machine Learning (pp. 510-517). Springer, Berlin, Heidelberg.
+
+- Optical recognition of handwritten digits, available from UCI Machine Learning Repository:
+https://archive.ics.uci.edu/ml/machine-learning-databases/optdigits/
+
+- Association Rules' Data retrieved from: http://snap.stanford.edu/class/cs246-data/AV1611Bible.txt
+
+<!-- - Market Basket Analysis Using R (DataCamp): https://www.datacamp.com/tutorial/market-basket-analysis-r -->
+
+
+
+
+
+
+

@@ -1,0 +1,357 @@
+---
+title: ' Project `r params$proj_number`: `r params$proj_title`' 
+subtitle: 'DS 5494 - Statistical Data Mining II'
+author: 
+  - Willliam Ofosu Agyapong^[woagyapong@miners.utep.edu]
+  - University of Texas at El Paso (UTEP) 
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  bookdown::pdf_document2:
+    fig_caption: true
+    latex_engine: pdflatex
+    number_sections: true
+    toc: true
+    toc_depth: 4
+header-includes:
+  - \usepackage{amsmath}
+  - \usepackage{amssymb}
+  - \usepackage{amsfonts}
+  - \usepackage{amsthm}
+  - \usepackage{fancyhdr}
+  - \pagestyle{fancy}
+  - \fancyhf{}
+  - \rhead{William O. Agyapong}
+  - \lhead{Project `r params$proj_number` -- `r params$proj_title`}
+  - \cfoot{\thepage}
+  - \usepackage{algorithm}
+  - \usepackage[noend]{algpseudocode}
+geometry: margin = 1in
+fontsize: 11pt
+params:
+  proj_number: IV
+  proj_title: PageRank and Anomaly Detection
+---
+
+```{r setup, include=FALSE}
+# Set global options for output rendering
+knitr::opts_chunk$set(eval = T, echo = T, warning = F, message = F, 
+                      fig.align = "center", fig.pos = "H", out.extra = "")
+
+#----------------- Load required packages
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(patchwork) # interface for laying out plots from ggplot2
+options(kableExtra.auto_format = F) # disable kableExtra automatic global options
+library(kableExtra)
+library(igraph)
+  
+#----------------- set the current working directory to this path
+setwd(dirname(rstudioapi::getSourceEditorContext()$path)) 
+
+#-----------------  Set default rounding to 4 decimal places
+# options(digits = 4)
+
+#-----------------  Set default ggplot theme
+theme_set(theme_classic())
+
+```
+
+
+
+
+
+<!-- QUESTION ONE: WHAT --> 
+<!-- \noindent\rule{17.5cm}{0.8pt} -->
+
+\newpage
+
+# PageRank
+
+## Part (a): Obtain the link matrix $\mathbb{L}$
+
+
+```{r webpage-links,out.width="40%"}
+#| fig.cap = "The original graph showing Links among several webpages"
+include_graphics("webpage-links.png")
+```
+
+### Link matrix for network in Figure 1
+
+From Figure \@ref(fig:webpage-links), we can derive the link matrix, $\mathbb{L}$, as follows where we let $L_{ij} = 1$ if page $j$ points to page $i$, and 0 otherwise. We utilized the `graph_from_literal()` function from `igraph` package to obtain the link matrix by specifying the vertices and indicating the directed connections among vertices with the "-+" operator.
+
+```{r}
+webgraph <- graph_from_literal(A, B, C, D, E, F, G, A-+C, A-+D, B-+A, C-+D, D-+B,
+                               D-+E, E-+B, E-+D, E-+G, F-+C, F-+D, F-+G)
+
+# Extract the adjacency matrix of the network 
+L <- as_adjacency_matrix(webgraph, sparse = F)
+
+data.frame(L) %>%
+    kable(caption = "Link matrix for network in Figure 1", booktabs=T,
+          linesep="") %>%
+    kable_styling(latex_options = c("HOLD_position"))
+```
+
+## Part (b): Reproduction of the graph in Figure \@ref(fig:webpage-links) from the link matrix
+```{r webgraph}
+#| fig.cap = "Webpages graph constructed from the link matrix obtained in part (a)"
+set.seed(110)
+webgraph2 <- graph_from_adjacency_matrix(L)
+V(webgraph2)$color <- c("dodgerblue", "tomato", "lightgreen", "violet", "cyan",
+                        "orange", "dodgerblue")
+plot(webgraph2, edge.arrow.size=0.5)
+```
+
+Comparing Figure \@ref(fig:webpage-links) to Figure \@ref(fig:webgraph), we observe the same network structure, that is, we have the same connections among the nodes as before. We can therefore be confident that the link matrix was correctly generated.
+
+## Part (c): Computing PageRank score for each webpage
+
+For this, we use the `page.rank()` function from the `igraph` package by supplying our graph object from part (b) and leaving all other parameters at their default settings.
+
+```{r}
+pagerank <- page.rank(webgraph)$vector
+pagerank_df <- data.frame(Webpage=names(pagerank), PageRank=pagerank)
+kable(pagerank_df, caption = "PageRank scores for each webpage", booktabs=T,
+      col.names = c("Webpage", "PageRank score"), row.names = F, linesep="")%>%
+    kable_styling(latex_options = c("HOLD_position")) %>%
+    kable_classic()
+```
+
+
+```{r pagerank, fig.cap="Barplot of PageRank scores for each webpage arranged in decreasing order of magnitude by their scores.", out.width="60%"}
+ggplot(pagerank_df, aes(x=reorder(Webpage, -PageRank), y=pagerank)) +
+    geom_bar(stat = "identity", fill="navy", alpha=0.6) +
+    labs(x="Webpage", y="PageRank scores", title = "Webpages ranked by their PageRank scores")
+```
+
+As suggested by Figure \@ref(fig:pagerank), the pages, D, A and B, are in the top-3 list, with web page F having the least PageRank score. From the webpage graph (Figure \@ref(fig:webgraph)), D had the most in-coming links, so based on the mechanism of the PageRank algorithm, it comes as no surprise that it is on top of the list. This makes page D the most important webpage, followed by A, then B, and finally F.
+
+
+# Anomaly Detection
+
+Here, we consider the `HTP` (high tech part) data available in the R package `ICSOutlier.` This data set contains the results of $p = 88$ numerical tests for $n = 902$ high-tech
+parts. Based on these results the producer considered all parts functional and all of them were sold. However two parts, **581** and **619**, showed defects in use and were returned to the
+manufacturer. These two observations can thus be considered as outliers and the objective is ***to detect them by re-examining the test data***.
+
+## Part (a): Bringing in the data
+
+We use the following codes to retrieve the **HTP** data for our analysis.
+
+```{r}
+# install.packages("ICSOutlier")
+library(ICSOutlier)
+data(HTP)
+htp_dat <- HTP
+# dim(dat); head(dat)
+outliers.true <- c(581, 619)
+
+dim(htp_dat)
+```
+
+The above output confirms theat the HTP data set we obtained indeed contains 902 (high-tech parts designed for consumer products) observations and 88 variables (tests) as we expect.
+
+
+### Initial EDA
+```{r init-eda, fig.cap="Boxplots of all variables in the HTP data set"}
+htp_dat %>%
+tidyr::pivot_longer(everything(), names_to="variable", values_to="value") %>%
+ggplot(aes(variable, value, fill=variable)) +
+geom_boxplot() +
+labs(x='Variables', y='Values') +
+theme(legend.position = "none",
+axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
+```
+
+Figure \@ref(fig:init-eda) reveals the presence of many outlying observations. The goal of the rest of the analysis is to determine whether the two defective parts **581** and **619** are among these potential outliers.
+
+
+## Part (b)
+
+### Estimates of the mean vector $\hat{\mathbb{\mu}}$ and the `VCOV` matrix $\hat{\Sigma}$ with MCD
+
+Obtaining estimates of the mean vector $\hat{\mathbb{\mu}}$ and the variance-covariance (`VCOV`) matrix $\hat{\Sigma}$ of the data with MCD with a 25% breakdown point. Using the `covMcd()` function from the `robustbase` package with `cor` set to false, and `alpha` $=0.75$ based on our breakdown point, we obtain the required estimates as follows. Given the many outputs, we chose to display the means of only the first 10 variables and their corresponding 10 by 10 submatrix from the estimated VCOV matrix.
+
+
+```{r}
+library(robustbase)
+# Obtain MCD estimates with a breakdown point of 25%
+fit.robust <- covMcd(htp_dat, cor = F, alpha = 0.75)
+mean_vector <- fit.robust$center # the final estimate of location
+VCOV <- fit.robust$cov # the final estimate of scatter
+
+# displaying results
+data.frame(rbind(mean_vector[1:10])) %>%
+    kable(caption = "Estimated mean vector for first 10 variables", booktabs=T)%>%
+    kable_styling(latex_options = c("HOLD_position")) %>%
+    kable_classic()
+
+data.frame(VCOV[1:10, 1:10]) %>%
+    kable(caption = "Estimated mean vector for first 10 variables", booktabs=T)%>%
+    kable_styling(latex_options = c("HOLD_position")) %>%
+    kable_classic()
+```
+
+We see that entries of the mean vector as well as the VCOV matrix are approximately 0. The actual data had very low values so this is not surprising (Please refer to Figure \@ref(fig:init-eda)).
+
+### Plot of robust Mahalanobis distance of each observation with respect to the MCD estimates
+
+We use the `mahalanobis()` function to compute the robust Mahalanobis diatance of each observation with respect to the MCD estimates of the mean vector and the VCOV matrix computed above. Figure \@ref(fig:RD-plot) shows a plot of the resulting distances with an outlier threshold based on the $\chi_{p=88}^2$ distribution at $2.5\%$ significance level. The two defective parts are highlighted in 
+
+
+```{r RD-plot, fig.cap="Plot of robust Mahalanobis distance of each observation with respect to the MCD estimates of location and scatter"}
+
+# compare results to output from this plot function
+# aq.plot(htp_dat, alpha=0.025) # pick one
+
+# Compute Mahalanobis distance
+robust_distances <- mahalanobis(htp_dat, center=mean_vector, cov=VCOV) 
+# fit.robust$mah contains the same values
+
+# Cut-off based on the chi-square distribution
+chisq_cutoff <- qchisq(0.975, df = ncol(htp_dat)) # at alpha = 0.025
+
+# PLOT THE RESULTS
+RD <- robust_distances
+ids_most <- which(RD >= 22417)  # most outlying ids
+id_most <- ids_most[which.max(RD[ids_most])]
+
+par(mfrow=c(1,1), mar=rep(4,4))
+colPoints <- ifelse(RD >= chisq_cutoff, 1, grey(0.5))
+pchPoints <- ifelse(RD >= chisq_cutoff, 16, 4)
+plot(seq_along(RD), RD, pch = pchPoints, col = colPoints,
+	ylim=c(0, max(RD, chisq_cutoff) + 2), cex.axis = 0.7, cex.lab = 0.7,
+	ylab = expression("(Mahalanobis Distance)"**2), xlab = "Observation Index")
+abline(h = chisq_cutoff, lty = "dashed", col="red")
+legend("topleft", lty = "dashed", cex = 0.7, ncol = 2, bty = "n",
+	legend = expression(paste(chi[p]**2, " cut-off")), col="red")
+text(619, RD[619], labels=619, col="blue")
+text(581, RD[581], labels=581, col="blue")
+text(id_most, RD[id_most], labels=id_most, col=id_most)
+```
+
+Observations above or equal to the $\chi^2_{p=88}=$ `r round(chisq_cutoff,2)` represented by the red dashed line are considered potential outliers. Obviously, the two defective parts show up above the cut-off line among the top list of potential outliers. However, they are not the most outlying observations since the $303^{th}$ observation can be seen as the most outlying.
+
+## Part (c)
+
+### Defining anomaly score plotting function
+
+For convenience, we packaged the R codes for plotting the anomaly scores into a function called `plot_anomaly_score()`. By default if the argument `threshold` is NULL, the $99^{th}$ quantile of the anomaly scores supplied is computed as the cut-off or threshold for detecting potential outliers, otherwise whatever the user supplied is used.
+
+```{r}
+plot_anomaly_score <- function (score, threshold=NULL, anomaly_id=NULL,pch=1,
+                                xlab="Observation index", ylab="Anomaly score", 
+                                main="", seg_col="#7AD151FF", label_adj=0.03,
+                                 cex_adj=4,
+                                label_col="deepskyblue2", threshold_col="red") {
+    
+    # set threshold/cutoff point
+    if (is.null(threshold)) threshold <- quantile(score, 0.99)
+    
+    # get anomaly ids
+    if (is.null(anomaly_id)) anomaly_id <- which(score > threshold)
+    
+    plot(seq_along(score), score, type="p", pch=pch, main=main, xlab=xlab, 
+         ylab=ylab, cex=score*cex_adj, col="coral2")
+    # add line segments
+    add.seg <- function(x) segments(x0=x[1], y0=0, x1=x[1], y1=x[2], 
+                                lty=1, lwd=1.5, col="#7AD151FF")
+    apply(data.frame(id=1:length(score), score=score), 1, FUN=add.seg)
+    # add indices as labels
+    text(anomaly_id, score[anomaly_id]+label_adj, label=anomaly_id, 
+     col=label_col, cex=0.7) 
+    # add a threshold line
+    abline(h = threshold, lty = "dashed", col=threshold_col)
+}
+```
+
+
+### Isolation Forest (iForest)
+
+To apply the isolation forest anomaly detection algorithm on our data, we used `IsolationTrees()` function from the `IsolationForest` package available for Mac users. 100 fully deterministic isolation trees were built by setting `ntree` to 100 and `rForest` to 0. All other parameters were left at their default values.
+
+
+```{r eval=T, fig.cap="Anomaly detection via isolation forest (iForest)"}
+#Isolation Forest
+library(IsolationForest)
+
+# model specification
+iso_tree <- IsolationTrees(htp_dat, rFactor=0, ntree = 100)
+# get anomaly scores
+anomaly_score <- AnomalyScore(htp_dat, iso_tree)
+iso_scores <- anomaly_score$outF
+
+# plot anomaly scores
+plot_anomaly_score(iso_scores, main = "Anomaly detection via iForest",
+                   label_adj = 0.003, threshold_col = "#414487FF")
+```
+
+An observation is considered a potential outlier if its anomaly score is close to 1. Thus, to detect the outlying observations, we used the $99^{th}$ quantile of the scores as a threshold indicated by the dashed horizontal line. The indices of the observations identified as potential outliers are labeled on the plot.
+
+From the plot, the two defective parts 581 and 619 are considered outliers by the iForest anomaly detection method.
+
+### Local Outlier Factor (LOF)
+
+We perform another anomaly detection using LOF with the help of the `lof()` function from the `Rlof` package. The $k^{th}$ distance parameter was set to **8**. Figure \@ref(fig:lof) shows the result obtained. 
+
+```{r lof, fig.cap="Anomaly detection via Local Outlier Factor (LOF)"}
+library(Rlof)
+# #2A788EFF
+anomaly_scores <- lof(htp_dat, k=8)
+quant_cutoff <- quantile(anomaly_scores, 0.99)
+anomaly_id <- which(anomaly_scores > quant_cutoff)
+lof_scores <- scale(anomaly_scores, center = min(anomaly_scores), 
+                    scale = max(anomaly_scores)-min(anomaly_scores)) 
+# plot the anomaly scores 
+plot_anomaly_score(lof_scores, label_adj = 0.02, cex_adj = 5.5, 
+                   threshold_col = "#414487FF",main = "Anomaly detection via LOF")
+```
+
+From the graph, we observe that with a $99\%$ quantile threshold, LOF clearly detected 
+the two defective parts 581 and 619 as anomalies among its list of potential outliers. 
+
+
+### Comparing results from iForest and LOF
+
+```{r "iforest-lof", fig.cap="Comparing results from iForest and LOF"}
+par(mfrow=c(1,2))
+# plot anomaly scores for iForest:
+plot_anomaly_score(iso_scores, main = "Anomaly detection via iForest",
+                   label_adj = 0.003, threshold_col = "#414487FF")
+
+# plot the anomaly scores for lof:
+plot_anomaly_score(lof_scores, label_adj = 0.02, cex_adj = 5.5, 
+                   threshold_col = "#414487FF", main = "Anomaly detection via LOF")
+```
+
+We observe from Figure \@ref(fig:iforest-lof) that, with the same 99% quantile threshold, both iForest and LOF succeeded in detecting the two defective parts as outliers, since the two observations **581** and **619** are part of the list of potential outliers for the two methods. Thus, these two anomaly detection methods suggest that the two defective parts are indeed anomalies. However, for this anomaly detection problem, we can see that LOF performed better than iForest since the LOF method clearly singled the two defective parts out from the other potential outliers, leaving no doubt that those two observations are indeed anomalies. It appears that the two defective parts are the only common outliers detected by the two methods.
+
+
+<!-- ### One-class SVM -->
+
+<!-- nu = 0.03 means that the algorithm will designate 3% data as outliers. -->
+
+```{r eval=F, echo=F}
+# =================================================
+# METHOD IV: ONE-CLASS SVM FOR NOVELTY DETECTION
+# =================================================
+
+# NO SVDD IMPLEMENTATION IN R YET (10/08/2020)
+
+library(e1071)
+
+# model specification
+p <- NCOL(htp_dat)	
+fit.OneClassSVM <- svm(htp_dat, y=NULL, type="one-classification", cost = 10, nu=0.01, # nu - OC-SVM TUNING PARAMETER
+     gamma=1/p)  # gamma - PARAMETER IN RBF KERNEL
+summary(fit.OneClassSVM) 
+
+# test on the whole set
+pred <- predict(fit.OneClassSVM, newdata=htp_dat)
+sum(pred)
+ids <- which(pred==TRUE)
+dd <- htp_dat[ids, ]
+```
+
+<!-- Since this algorithm does not give scores but a binary label indicating whether an observation is anomalous or not, it is not straingthforward to generate a plot since our data set is high-dimensional with more than two variables. As a result, we performed PCA on the data and used the first two PCs as new features for plotting purposes.   -->
+

@@ -1,0 +1,514 @@
+---
+title: ' Project `r params$proj_number`: Optimization and Kernel Methods' 
+subtitle: 'DS 5494 - Statistical Machine Learning II'
+author: 
+  - Willliam Ofosu Agyapong^[woagyapong@miners.utep.edu]
+  - University of Texas at El Paso (UTEP) 
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    fig_caption: true
+    latex_engine: pdflatex
+    number_sections: true
+    toc: true
+    toc_depth: 4
+header-includes:
+  - \usepackage{amsmath}
+  - \usepackage{amssymb}
+  - \usepackage{amsfonts}
+  - \usepackage{amsthm}
+  - \usepackage{fancyhdr}
+  - \pagestyle{fancy}
+  - \fancyhf{}
+  - \rhead{William O. Agyapong}
+  - \lhead{Project `r params$proj_number` -- `r params$proj_title`}
+  - \cfoot{\thepage}
+  - \usepackage{algorithm}
+  - \usepackage[noend]{algpseudocode}
+geometry: margin = 1in
+fontsize: 11pt
+params:
+  proj_number: II
+  proj_title: Optimization and Kernel Methods
+---
+
+```{r setup, include=FALSE}
+# Set global options for output rendering
+knitr::opts_chunk$set(eval = T, echo = T, warning = F, message = F, fig.align = "center")
+
+#----------------- Load required packages
+# library(summarytools)
+library(dplyr)
+library(broom)
+library(ggplot2)
+library(knitr)
+# library(corrplot) # correlation plot
+library(patchwork) # interface for laying out plots from ggplot2
+# options(kableExtra.auto_format = F) # disable kableExtra automatic global options
+library(kableExtra)
+  
+#----------------- set the current working directory to this path
+setwd(dirname(rstudioapi::getSourceEditorContext()$path)) 
+
+#-----------------  Set default rounding to 4 decimal places
+options(digits = 4)
+
+#-----------------  Set default ggplot theme
+theme_set(theme_classic())
+
+```
+
+
+
+
+
+<!-- QUESTION ONE: WHAT --> 
+<!-- \noindent\rule{17.5cm}{0.8pt} -->
+
+\newpage
+
+# Introduction{-}
+In this project, we consider the Shill Bidding data set available from UCI Machine Learning Repository
+http://archive.ics.uci.edu/ml/datasets/Shill+Bidding+Dataset.
+The data set is based on eBay auctions of a popular product. 
+
+The objective of the study is **to predict whether or not a bidding has normal behavior based on its characteristics**. The data set
+has 6,321 rows and 13 columns. A binary indicator in the last column, Class, will be our target variable. Table 1 provides details about the variables contained in the data set.
+
+```{r echo=FALSE}
+data.frame(rbind(c("Record ID", "Unique identifier of a record in the dataset."),
+c("Auction ID", "Unique identifier of an auction."),
+c("Bidder ID", "Unique identifier of a bidder."),
+c("Bidder Tendency", "A shill bidder participates exclusively in auctions of few sellers rather than a diversified lot. This is a collusive act involving the fraudulent seller and an accomplice."),
+c("Bidding Ratio", "A shill bidder participates more frequently to raise the auction price and attract higher bids from legitimate participants."),
+c("Successive Outbidding", "A shill bidder successively outbids himself even though he is the current winner to increase the price gradually with small consecutive increments."),
+c("Last Bidding", "A shill bidder becomes inactive at the last stage of the auction (more than 90% of the auction duration) to avoid winning the auction."),
+c("Auction Bids", "Auctions with SB activities tend to have a much higher number of bids than the average of bids in concurrent auctions."),
+c("Auction Starting Price","a shill bidder usually offers a small starting price to attract legitimate bidders into the auction."),
+c("Early Bidding", "A shill bidder tends to bid pretty early in the auction (less than 25% of the auction duration) to get the attention of auction users."),
+c("Winning Ratio","A shill bidder competes in many auctions but hardly wins any auctions."),
+c("Auction Duration", "How long an auction lasted."),
+c("Class", "0 for normal behavior bidding; 1 for otherwise."))) %>%
+  kable(booktabs=T, linesep="", col.names = c("Variable name", "Description"),
+        caption = "Variable Description") %>%
+  column_spec(1, '10em') %>%
+  column_spec(2, '30em') %>%
+  kable_styling(latex_options = c("HOLD_position")) %>%
+  kable_classic()
+
+# stringr::str_split(stringr::str_split(vardesc, "\n"), ":")
+```
+
+
+# Bringing in the Shill Bidding dataset
+
+Here, we import the csv file containing the data. From Table 1, we can see that the first three columns are ID variables. These variables are not of any predictive importance, so we remove them.
+
+Also, to be able to experiment with a logistic regression model with $\pm 1$ valued responses we changed the value 0 to -1 for the target variable.
+
+```{r}
+# importing data
+# shill_bidding_orig <- readr::read_csv("Shill Bidding Dataset.csv")
+shill_bidding_orig <- read.csv("Shill Bidding Dataset.csv")
+# dim(shill_bidding_orig)
+# names(shill_bidding_orig)
+# kable(head(shill_bidding_orig, 10))
+
+# remove first three columns (ID variables)
+shill_bidding <- shill_bidding_orig %>%
+  dplyr::select(-c(Record_ID,Auction_ID, Bidder_ID)) %>%
+  # Change the value 0 to -1 for Class
+  mutate(Class = ifelse(Class == 0, -1, 1))
+
+# confirm the conversion was done correctly
+dim(shill_bidding)
+table(shill_bidding_orig$Class)
+table(shill_bidding$Class)
+```
+
+After the initial preprocessing, the data set that we will be using in this project consist of 6321 observations and 10 variables.
+
+
+```{r}
+shill_bidding %>%
+  slice_sample(n=10) %>%
+  kable(booktabs=T, linesep="", align = "c",
+        caption = "10 random samples from the data after initial cleaning") %>%
+  kable_styling(latex_options = c("scale_down", "HOLD_position")) %>%
+  kable_classic()
+```
+
+# Exploratory Data Analysis
+
+## Part (a): Investigating distinct levels or values for each variable
+
+```{r eval=T}
+# cols <- 1:NCOL(shill_bidding)
+# for (j in cols){
+#   x <- shill_bidding[,j]
+#   print(names(shill_bidding)[j])
+#   # print(sort(unique(x, incomparables=TRUE)))
+#   print(table(x, useNA="ifany"))
+# }
+
+
+output <- NULL
+roles <- c(rep("Predictor", 9), "Target")
+for(i in seq_along(shill_bidding)) {
+  output <- rbind(output, c(names(shill_bidding)[i],
+                  class(shill_bidding[[i]]),
+                  roles[i],
+                  length(unique(shill_bidding[[i]])))
+                  )
+}
+
+as.data.frame(output) %>%
+  kable(booktabs=T, linesep="", align = "lccc",
+        col.names = c("Variable name", "Data type", "Role", "Number of distinct values"))%>%
+  kable_styling(latex_options = c("HOLD_position")) %>%
+  kable_classic()
+
+```
+
+
+- The variables `Class`, `Successive Outbidding`, and `Auction Duration` have fewer distinct values.
+
+
+## Part (b): Checking for missing data
+
+```{r}
+# inspecting missing values using the "naniar" package
+naniar::miss_var_summary(shill_bidding) %>% 
+  kable(booktabs = T, linesep="", align = "lcc",
+        col.names = c("Variable", "Number missing", "Percent missing"),
+        cap = "Amount of missing values in the shill bidding dataset") %>%
+  kable_styling(latex_options = c("HOLD_position")) %>%
+  kable_classic()
+
+```
+
+**Clearly, the above output indicates that the data has no missing values.**
+
+## Part (c): Parallel boxplots
+
+```{r}
+shill_bidding %>%
+  tidyr::pivot_longer(-Class,names_to="variable", values_to="value") %>%
+  ggplot(aes(variable, value, fill=variable)) +
+  geom_boxplot() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
+  
+```
+
+Judging from the sizes of the boxes and the minimum and maximum values for each variable, it is evident that **the predictors do not have the same range and variation**. Take for instance, the range for `Auction Duration` is about 9 and its IQR is about 4 compared to the rest of the predictors whose range and IQR do not come close. Interestingly, the 25% quantile of `Auction_Duration` is even higher that the 75% quantile of all the other attributes. It will therefore be necessary to scale the variables in our modeling process.
+
+<!-- However, some of the attributes such as `Bidder Tendency` and `Bidding Ratio`, and `Early Bidding` and `Last Bidding` share similar distributions, respectively. -->
+
+## Part (d): A bar plot of the binary response `Class`
+
+```{r}
+shill_bidding %>%
+  mutate(Class = factor(Class)) %>% 
+  group_by(Class) %>%
+  summarise(n=n()) %>% 
+  mutate(pct = n/sum(n),
+         lbl = scales::percent(pct)) %>%
+  ggplot(aes(Class, n, fill=Class)) +
+  geom_bar(stat = "identity", position = "dodge",show.legend = F) +
+  geom_text(aes(label = lbl), size=3, position = position_stack(vjust = 0.5))  +
+  labs(y="Observations")
+
+# geom_text(aes(label = scales::label_comma()(n)), size=2,
+#                           position = position_stack(vjust = 1))
+```
+
+<!-- Unquestionably, the data set present us with a serious unbalanced problem where -->
+
+The `-1` class has 78% more observations than the `1` class, signifying a marked difference between the two classes. However, this difference does not seem to present us with an unbalanced classification problem since our sample size (6321) is relatively large.
+
+# Data Partition
+
+The resulting data is therefore partitioned as follows. A ***125*** seed was used throughout to ensure reproducibility of results affected by random generations.
+
+```{r eval=T}
+set.seed(125) # set seed for reproducibility
+n <- nrow(shill_bidding)
+split_id <- sample(1:3, size = n, prob = c(2,1,1)/4, replace = T)
+# train_index <- sample(1:n, size=trunc(n*train_ratio), replace=FALSE)
+# rem_index <- (setdiff(1:n, train_index))
+# val_index <- sample(rem_index, size=trunc(length(rem_index)*0.5), replace=FALSE)
+# test_index <- setdiff(rem_index, val_index)
+
+
+train_set <- shill_bidding[split_id==1, ] # training data D1
+validation_set <- shill_bidding[split_id==2, ] # validation data D2
+test_set <- shill_bidding[split_id==3, ] # test data D3
+dim(train_set); dim(validation_set); dim(test_set)
+```
+
+Using the ratio 2:1:1, the shill bidding data set was partitioned into `r nrow(train_set)` training observations, `r nrow(validation_set)` validation observations and `r nrow(test_set)` test observations, respectively, all with 10 variables as expected.
+
+
+# Logistic Regression - Optimization
+
+In this section, we first apply optimization techniques to implement the logistic regression model by directly minimizing the negative log-likelihood function. Next, we compare our results to those obtained from the standard R `glm()` function and finally evaluate the performance of the model we implemented manually on a test data. 
+
+## Part (a)
+
+### Obtaining the maximum likelihood estimates of regression parameters
+
+Here, we used the `optim()` function in R to minimize the negative log-likelihood function as a means of obtaining estimates for the logistic regression parameters.
+The **BFGS** optimization algorithm was specified and the parameter estimates were all initialized at 0. The table below presents the results obtained.
+
+```{r}
+# merge training and validation data
+train_valid_set <- dplyr::bind_rows(train_set, validation_set)
+dim(train_valid_set)
+# prepare the data
+X <- train_valid_set %>% dplyr::select(-Class)
+X <- as.matrix(X)
+y <- train_valid_set$Class
+p <- ncol(X)
+
+# The negative loglikelihood function for Y=+1/-1
+nloglik <- function(beta, X, y){
+	if (length(unique(y)) !=2) stop("The target y must be binary!") 
+	X <- cbind(1, X)
+	nloglik <- sum(log(1+ exp(-y*X%*%beta)))
+	return(nloglik) 
+}
+
+# FIT LOG-LINEAR MODEL 
+b0 <- rep(0, (p+1))
+optim_fit <- optim(par = b0, fn=nloglik, y=y, X=X, method = "BFGS", hessian = TRUE) 
+
+beta.hat <- optim_fit$par
+
+# get the standard errors and corresponding p-values for each parameter
+VCOV.est <- solve(optim_fit$hessian) # the variance covariance matrix
+se <- sqrt(diag(VCOV.est))
+z.wald <- beta.hat/se
+pvalue <- pchisq(z.wald^2, df=1, lower.tail=FALSE)
+
+# display results
+result <- data.frame(estimate=beta.hat, se, z.wald, pvalue)
+row.names(result) <- c("Intercept", names(train_valid_set)[-10])
+round(result, digits = 4) %>%
+    kable(booktabs = T, linesep="",
+          cap = "Regression parameters with standard errors and corresponding p-values") %>%
+   kable_styling(latex_options =c("HOLD_position"))%>%
+   kable_classic()
+```
+
+ - At 5% significance level, the p-values suggest that only three predictors, `Bidder Tendency`, `Successive Outbidding` and `Winning Ratio` appear to be statistically significant.
+ 
+ 
+## Part (b): Comparing results to the standard R function `glm()`
+
+```{r}
+
+# fit a logistic model via glm()
+D1D2_new <- train_valid_set %>% mutate(Class = ifelse(Class == -1,0,1))
+
+fit <- glm(Class ~., data=D1D2_new, family = "binomial")
+
+# extract and display output
+glm_estimates <- summary(fit)$coeff
+
+kable(glm_estimates, booktabs = T, linesep="",
+          cap = "") %>%
+   kable_styling(latex_options =c("HOLD_position"))%>%
+   kable_classic()
+
+```
+
+- Interestingly, using the standard R function `glm()` to train a logistic regression model on the same data yielded identical results compared to the logistic model implemented with the `optim()` function via maximum likelihood estimation. The results are approximately the same. In fact, judging from the p-values, the same predictors, `Bidder Tendency`, `Successive Outbidding` and `Winning Ratio`, as obtained in 4(a) appear to be the significant predictors when a threshold of 5% is used. 
+
+- By looking at the coefficients, it can be said that all the predictors, with the exception of `Early Bidding`, are positively associated with the target `Class` (they increase the log odds of being in the positive class). For example, the coefficient for `Bidder Tendency` is **1.0539** which means that a unit increase in `Bidder Tendency` increases the odds of being in the positive class by approximately 186.9% (exp(1.0539)=2.869, 2.869-1=1.869) more than being in the negative class, holding all other predictors fixed.
+
+### Checking for convergence
+
+```{r}
+optim_fit$convergence
+```
+
+The output of 0 indicates that the optimization algorithm converged.
+
+
+## Part (c): Evaluating the trained logistic model in 4(a) on the test data
+
+For the purpose of computing prediction accuracy, we obtain predictions based on the following formula:
+
+$$ 
+\hat{y}' = sgn\left[\frac{exp(X'\hat{\beta})}{1+exp(X'\hat{\beta})} - 0.5\right], \qquad (1)
+$$
+where $X'$ and $\hat{\beta}$ denote the design matrix from the test data with additional first column of 1's, and a vector of estimated regression coefficients, respectively.
+
+```{r}
+expit <- function(x) {
+    return(1/(1+exp(-x)))
+}
+
+Xprime <- as.matrix(cbind(1, test_set[, -NCOL(test_set)]))
+predicted_y <- sign(expit(Xprime%*%optim_fit$par)-0.5) # a vector of +-1's
+observed_y <- test_set$Class
+conf_mat <- table(observed_y, predicted_y); conf_mat
+(logit.pred_acc <- sum(diag(conf_mat))/sum(conf_mat))
+```
+Out of the `r nrow(test_set)` observations in the test data, **`r sum(diag(conf_mat))`** were correctly classified leading to a high prediction accuracy of `r round(logit.pred_acc,4)*100`%.
+
+# Primitive LDA - The Kernel Trick
+
+We implement the primitive LDA (linear discriminant analysis) classifier below
+
+$$\hat{y} = sgn\{(m_+-m_-)^Tz - (m_+ - m_-)^Tm\} = m_{+}^{T}z - m_{-}^{T}z + \frac{m_-^Tm_- - m_+^Tm_+}{2}, \qquad (2)$$
+where all the four terms, $m_{+}^{T}z$, $m_{-}^{T}z$, $m_-^Tm_-$, and $m_+^Tm_+$, are computed using the kernel trick procedure.
+
+## Part (a): Standardizing the predictor matrices
+
+Letting $X_1$ and $X_2$ to denote the matrix of all predictors corresponding to the training data and the validation data, respectively, we first scale $X_1$ according to its column means and SDs and later scale $X_2$ according to the column means and SDs computed from $X_1$ as follows. 
+
+```{r}
+# obtain the predictor matrices
+ncols <- NCOL(shill_bidding)
+X1 <- as.matrix(train_set[-ncols]) 
+X2 <- as.matrix(validation_set[-ncols])
+X3 <- as.matrix(test_set[-ncols])
+
+# standardize X1 and X2
+scaledX1 <- scale(X1)
+X1_col_means <- attributes(scaledX1)$`scaled:center`
+X1_col_sds <- attributes(scaledX1)$`scaled:scale`
+scaledX2 <- scale(X2, center = X1_col_means, scale = X1_col_sds) 
+
+```
+
+
+## Part (b): Training the LDA-P classifier with a polynomial kernel family
+
+For convenience, the LDA classifier depicted in equation (2) is implemented in a function called `kernLDA` for use throughout the rest of the project. 
+
+In kernel methods, the choice of a kernel function and the choices of its parameters play an important role on the outcome of a given learning task. For this project, we chose a ***polynomial kernel family*** as implemented in the **kernlab** R package. A validation technique was then employed to determine the optimal choice of the degree parameter ranging from **1 to 15**, while leaving the scale and offset parameters at their default values of **1**. 
+
+```{r warning=F, message=F}
+
+#' Primitive LDA via the "kernel trick"
+#'
+#' @param kernel the kernel function to be used to calculate the kernel matrix. 
+#' @param data1 a data matrix of scaled features from train set to be used to calculate 
+#` the kernel matrix.
+#' @param data2 second data matrix of scaled features to calculate the kernel matrix, 
+#` either validation data for parameter tuning or test data for predictions.
+#' @param target 
+#'
+#' @return a list containing a vector of predictions, the constant b, and 
+#` the vector w.z.
+#`
+kernLDA <- function (kernel, data1, data2=NULL, target) {
+    
+    if(!all(unique(target) %in% c(-1,1))) stop("Please use the plus 1 minu 1 class
+                                         coding for the target.")
+    # compute the terms in equation 1 after expanding
+    kernmat <- kernlab::kernelMatrix
+    term1 <- colMeans(kernmat(kernel, x=data1[target==1,], y=data2)) 
+    term2 <- colMeans(kernmat(kernel, x=data1[target==-1,], y=data2)) 
+    term3 <- mean(kernmat(kernel, data1[target==-1,])) 
+    term4 <- mean(kernmat(kernel, data1[target==1,]))
+    
+    # assemble all terms to obtain the predicted y 
+    w.z <- (term1 - term2)
+    b <- (term3 - term4)/2
+    yhat <- sign(w.z + b)
+    return(list(yhat=yhat, w.z=w.z, b=b))
+}
+
+#-----
+deg_vec <- 1:15
+pred.acc_vec <- vector("numeric", length(deg_vec))
+for (i in seq_along(deg_vec)) {
+    # choose the polynomial kernel family and tune the degree parameter, leaving
+    # the scale and offset parameters at their defaults of 1.
+    d <- deg_vec[i]
+    kern <- kernlab::polydot(degree = d)
+    
+    # train and validate the primitive LDA classifier
+    mod_LDA <- kernLDA(kernel=kern, data1=scaledX1, data2=scaledX2, target=train_set$Class)
+    
+    #compute prediction accuracy
+    ypred <- mod_LDA$yhat
+    yobserved <- validation_set$Class
+    conf_mat <- table(ypred, yobserved)
+    pred_accuracy <- sum(diag(conf_mat))/sum(conf_mat)
+    pred.acc_vec[i] <- pred_accuracy
+}
+
+summary(pred.acc_vec)
+```
+
+
+```{r}
+best.d <- deg_vec[which.max(pred.acc_vec)] # get the best degree
+
+# plot the prediction accuracy
+data.frame(d=deg_vec, pred_accuracy=pred.acc_vec) %>%
+    ggplot(aes(d, pred_accuracy)) +
+    geom_point() +
+    geom_line(color = "red") +
+    scale_x_continuous(breaks = deg_vec) +
+    geom_vline(xintercept = best.d, linetype="dashed", color="dodgerblue") +
+    labs(x="Polynomial order (degree)", y="Prediction accuracy",
+         title = "Choosing the best degree for the polynomial kernel")
+
+
+```
+
+From the above plot, the optimal degree for the polynomial kernel occurred at `r best.d` with a prediction accuracy of `r round(pred.acc_vec[best.d],4)*100`%. Thus, the best classifier among the polynomial kernel family considered corresponds to an inhomogeneous (positive offset of 1) quadratic kernel.
+
+## Part (c): Applying the best model to the test data
+
+```{r}
+# first pool the validation and training sets together
+Dprime <- dplyr::bind_rows(train_set, validation_set)
+# obtain the scaled predictor matrices
+Xprime <- as.matrix(Dprime[-NCOL(Dprime)]) 
+scaledXprime <- scale(Xprime)
+scaledX3 <- scale(X3, attributes(scaledXprime)$`scaled:center`, 
+                  attributes(scaledXprime)$`scaled:scale`)
+
+# apply the best trained classifier to the test data D3
+kern <- kernlab::polydot(degree = best.d)
+ypred <- kernLDA(kernel = kern, data1 = scaledXprime, data2 = scaledX3,
+                 target = Dprime$Class)$yhat
+yobserved <- test_set$Class
+conf_mat <- table(ypred, yobserved)
+(lda.pred_acc <- sum(diag(conf_mat))/sum(conf_mat))
+
+```
+
+The prediction accuracy on the test set is `r round(lda.pred_acc,4)*100`%, signifying a satisfactory performance.
+
+
+### Comparing the performance of the primitive LDA to the logistic regression
+
+```{r}
+data.frame(lda.pred_acc, logit.pred_acc) %>%
+    kable(booktabs=T, align = "c", col.names = c("LDA-P (quadratic kernel)", "Logistic
+                                                 Reg. (optimization)")) %>%
+    add_header_above(header = c("Prediction Accuracy"=2)) %>%
+    kable_styling(latex_options = c("HOLD_position")) %>%
+    kable_classic()
+```
+
+From the above table, with prediction accuracy of over 97%, it is clear that both models did very well on the test data, with the logistic regression model in part 4(c) however performing slightly better than the primitive LDA via a quadratic kernel function. These results suggest that the polynomial kernel appears to be a good choice for this classification problem.
+
+
+
+# Reference{-}
+
+- Data retrieved from: http://archive.ics.uci.edu/ml/datasets/Shill+Bidding+Dataset
+
+
+
+
+

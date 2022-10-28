@@ -1,0 +1,354 @@
+---
+title: ' Project `r params$proj_number`: SEMMA with Regularized Logistic Regression' 
+subtitle: 'DS 5494 - Statistical Machine Learning II'
+author: 
+  - Willliam Ofosu Agyapong^[woagyapong@miners.utep.edu]
+  - University of Texas at El Paso (UTEP) 
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    fig_caption: true
+    latex_engine: pdflatex
+    number_sections: true
+    toc: true
+    toc_depth: 4
+header-includes:
+  - \usepackage{amsmath}
+  - \usepackage{amssymb}
+  - \usepackage{amsfonts}
+  - \usepackage{amsthm}
+  - \usepackage{fancyhdr}
+  - \pagestyle{fancy}
+  - \fancyhf{}
+  - \rhead{William O. Agyapong}
+  - \lhead{Project `r params$proj_number` -- SEMMA with Regularized Logistic Regression}
+  - \cfoot{\thepage}
+  - \usepackage{algorithm}
+  - \usepackage[noend]{algpseudocode}
+geometry: margin = 1in
+fontsize: 11pt
+params:
+  proj_number: 1
+---
+
+```{r setup, include=FALSE}
+# Set global options for output rendering
+knitr::opts_chunk$set(echo = T, warning = F, message = F, fig.align = "center")
+
+#----------------- Load required packages
+# library(summarytools)
+library(dplyr)
+library(broom)
+library(ggplot2)
+library(knitr)
+# library(corrplot) # correlation plot
+library(patchwork) # interface for laying out plots from ggplot2
+# options(kableExtra.auto_format = F) # disable kableExtra automatic global options
+library(kableExtra)
+  
+#----------------- set the current working directory to this path
+setwd(dirname(rstudioapi::getSourceEditorContext()$path)) 
+
+#-----------------  Set default rounding to 4 decimal places
+options(digits = 4)
+
+#-----------------  Set default ggplot theme
+theme_set(theme_classic())
+
+```
+
+
+
+
+
+<!-- QUESTION ONE: WHAT --> 
+<!-- \noindent\rule{17.5cm}{0.8pt} -->
+
+\newpage
+
+# Importing the diabetes dataset
+
+```{r}
+# importing data
+diabetes <- readr::read_csv("diabetes_data_upload.csv")
+
+dim(diabetes)
+```
+
+The diabetes data set consists of **17** variables with **520** observations. Below is a snapshot of the data revealing the first 10 observations.
+
+```{r}
+kable(head(diabetes, 10), booktabs=T, linesep="", align = "c",
+      caption = "First 10 observations from the data") %>%
+kable_styling(latex_options = c("scale_down", "HOLD_position"))
+```
+
+
+# Exploratory Data Analysis
+
+In this step, we explore the data by inspecting the variable types, outlying and possibly wrong records, and other issues.
+
+## Variable types
+
+The table below shows the variable types and unique values for each of the 17 variables. We observe that all the variables, except **Age** being numeric (continuous), are dichotomous qualitative or categorical variables. The ages of the patients ranges between 16 and 90 years.
+
+
+```{r}
+
+output <- NULL
+for(i in seq_along(diabetes)) {
+  output <- rbind(output, c(names(diabetes)[i],
+                  class(diabetes[[i]]),
+                  paste(sort(unique(diabetes[[i]])), collapse = ", "))
+                  )
+}
+
+as.data.frame(output) %>%
+  kable(booktabs=T, linesep="",
+        col.names = c("Variable Name", "Type", "Unique values"))%>%
+  column_spec(1, '10em') %>%
+  column_spec(2, '5em') %>%
+  column_spec(3, '20em') %>%
+kable_styling(latex_options = c("HOLD_position"))
+
+```
+
+## Inspecting distinct values of each variable
+
+In this subsection, I investigated the distinct values of each variable as an attempt to identifying any unusual values or errors. The outputs showed nothing concerning. For brevity in reporting, the outputs were suppressed but the codes used are presented as follows.
+
+```{r eval=F}
+cols <- 1:NCOL(diabetes)
+for (j in cols){
+  x <- diabetes[,j]
+  print(names(diabetes)[j])
+  print(sort(unique(x, incomparables=T)))
+  print(table(x, useNA="ifany"))
+}
+
+```
+
+
+## Distribution of target variable
+
+```{r eval=T}
+library(gtsummary)
+diabetes %>%
+  dplyr::select(class) %>%
+  tbl_summary() %>%
+  modify_caption("Frequency distribution of the target variable class") %>%
+  modify_footnote(c(all_stat_cols()) ~ NA) %>%
+  bold_labels() %>%
+  modify_header(label="**Target Variable**") %>%
+  as_kable_extra(booktabs=T) %>%
+  kable_classic()%>%
+kable_styling(latex_options = c("HOLD_position"))
+```
+
+With 62% and 38% observations representing the positive and negative class, respectively, there  imbalance. However, I do not consider this to be a serious unbalanced classification problem.
+
+## Checking for missing values
+
+```{r}
+# inspecting missing values using the "naniar" package
+naniar::miss_var_summary(diabetes) %>% 
+  kable(booktabs = T, linesep="", align = "lcc",
+        col.names = c("Variable", "Number missing", "Percent missing"),
+        cap = "Amount of missing values in the diabetes dataset") %>%
+kable_styling(latex_options = c("HOLD_position"))
+
+```
+
+**Clearly, the data set has no missing values.**
+
+# Variable Screening
+
+## Association between class and continuous predictors
+
+Treating Age as a continuous predictor, the figure below shows how the distribution of Age varies between each level of the class variable. The p-value associated with the nonparametric Wilcoxon rank-sum test is displayed in red. A nonparametric testing procedure was adopted because Age does not appear to be symmetrically (normally) distributed between the two groups.  We observe two outliers for the positive class.
+
+The small p-value (0.012 < 0.25) shows that there exists statistically significant association between the Age and class of the patients. 
+
+```{r fig.cap="This figure assesses the association between Age and the target variable class."}
+# diabetes %>%
+#   ggplot(aes(Age, fill=class)) +
+#     geom_density(alpha=0.4) +
+#     scale_fill_manual(values = c("pink", "dodgerblue")) +
+#     # scale_color_manual(values = c("pink", "dodgerblue"), guide='none') +
+#     ggpubr::stat_compare_means(label.sep = " | ", vjust = 1, color = "red",
+#                            method = "t.test", paired = F)
+
+
+  
+ggplot(diabetes, aes(class, Age, fill = class)) +
+      geom_boxplot(alpha = 0.3) + xlab("") +
+      scale_fill_manual(values = c("pink", "dodgerblue")) +
+      theme(legend.position = "none") +
+      ggpubr::stat_compare_means(label.sep = " | ", vjust = 1, color = "red",
+                           method = "wilcox", paired = F)
+```
+
+## Association between class and categorical predictors
+
+
+```{r}
+diabetes %>%
+  dplyr::select(-Age) %>%
+  tbl_summary(by=class,
+              type = all_dichotomous() ~ "categorical") %>%
+  add_p() %>%
+  bold_labels() %>%
+  modify_caption("Associations between target variable and each categorical predictor") %>%
+  modify_header(label="**Patient Characteristic**") %>%
+  modify_footnote(c(all_stat_cols()) ~ NA)  %>%
+  modify_spanning_header(paste0("stat_",1:2) ~ "**Target variable (class) **") %>%
+  as_kable_extra(booktabs = TRUE, linesep="") %>%
+  kable_styling(latex_options = c("HOLD_position", "repeat_header")) %>%
+  kable_classic()
+```
+
+Table 4 above presents the contingency table for assessing associations between the target variable and each categorical predictor. The cells include the number and proportion of observations in each group for all categorical predictors and the target variable. The cell counts are within reasonable levels, so the $\chi^2$ test of independence method was employed throughout. All the corresponding p-values except those for **Itching** and **delayed healing** suggest enough evidence of association at the significance level $\alpha = 0.25$.
+
+
+## Reporting unimportant predictors
+
+From the foregoing results, **Itching** and **delayed healing** turn out to be the unimportant predictors when the liberal threshold significance level of $\alpha = 0.25$ is used. These two predictors will be removed from the predictor set in the model building phase to be performed later.
+
+
+
+## Correlation plot among the variables
+
+Since almost all the variables are categorical, the Goodman and Kruskal tau measure was used to investigate the association among the variables.
+
+```{r}
+# install.packages("GoodmanKruskal")
+library(GoodmanKruskal)
+# data1<- diabetes %>% select(class)
+dat<- GKtauDataframe(diabetes)
+plot(dat, colorPlot=T)
+```
+
+Generally, there is no high correlation among the predictors. This suggests that multicollinearity is not an issue here.
+
+# Data Partition
+
+For the purpose of model building, the target variable class was recoded to 0 and 1 for the negative and positive levels, respectively. Also, the unimportant predictors identified in Step 3 were removed, leaving behind 14 potential predictors. The resulting data is therefore partitioned as follows. A ***123*** seed was used throughout to ensure reproducibility of results affected by random generation.
+
+```{r}
+set.seed(123) # set seed for reproducibility
+ratio <- 2/3
+n <- nrow(diabetes)
+train_index <- sample(1:n, size=trunc(n*ratio), replace=FALSE)
+
+# recode the levels of the target  variable and remove unimportant predictors
+# class = factor(class, levels = c("Negative", "Positive"), labels = c(0, 1))
+diabetes_new <- diabetes %>%
+  mutate(class = ifelse(class == "Negative", 0,1)) %>%
+  dplyr::select(-Itching, -`delayed healing`)
+
+names(diabetes_new) <- snakecase::to_snake_case(names(diabetes_new)) # join variable names having more than one word with an underscore
+D1 <- diabetes_new[train_index, ] # training set
+D2 <- diabetes_new[-train_index, ] # test set
+dim(D1); dim(D2)
+```
+
+Using the ratio 2:1, the diabetes data set was partitioned into `r nrow(D1)` training observations and `r nrow(D2)` test observations, respectively, both with 15 variables (14 candidate predictors, 1 target variable).
+
+# Logistic Regression Modeling
+
+We now build a logistic regression model for this medical
+diagnosis task.
+
+## Part (a): Fitting the regularized logistic regression model
+
+A 5-fold cross validation regularized logistic regression model with LASSO penalty was fitted to the training set $D_1$.
+
+```{r}
+library(glmnet)
+# select target and create the design matrix
+y <- D1$class
+X <- model.matrix(~ . -class, data = D1)
+
+# fit the model
+set.seed(123)
+cv.lasso <- cv.glmnet(X, y, nfolds = 5, family="binomial", alpha=1, lambda.min=.0001,
+                      thresh = 1e-07, nlambda=500, standardize=F, maxit=3000, type.measure = "deviance")
+
+# best tuning parameter
+best.lambda <- cv.lasso$lambda.min; best.lambda
+plot(cv.lasso)
+```
+
+- The best tuning parameter $\lambda$ is obtained as `r best.lambda` based on the minimum cross-validated deviance. 
+
+- The plot suggests two possible models; one with 12 and the other with 10 variables. However, for the purpose of obtaining a simple model, the one with fewer variables is chosen.
+
+
+
+## Part (b): Presenting fnal `best' model fit
+
+A final model containing 10 predictors whose coefficients in absolute terms are greater than 0 is selected as the 'best' model. The selected variables include ***Age, Gender, Polyuria, Polydipsia, Sudden weight loss, Polyphagia, Genital thrush,  Irritability, partial paresis, and Alopecia.***.
+
+```{r}
+# beta.hat <-coef(cv.lasso, s="lambda.1se")
+beta.hat <-as.vector(coef(cv.lasso))
+# beta.hat <-as.vector(coef(cvfit.SCAD))
+cutoff <- 0
+terms <- colnames(X)[abs(beta.hat[-1]) > cutoff]; terms
+
+# Get the actual variables names for model building. 
+vars_selected <- stringr::str_remove(terms, "Yes|Male")
+formula.lasso <- as.formula(paste(c("class ~ 1", vars_selected),collapse = "  + "))
+D1 <- D1 %>% mutate(across(-age, as.factor))
+best.fit <- glm(formula.lasso, family = "binomial", data = D1)
+summary(best.fit)
+
+```
+
+- At 5% significance level, the predictors ***Age, Gender, Polyuria, Polydipsia, Polyphagia, Genital thrush,  Irritability, partial paresis*** remain important predictors since their p-values are less than 0.05.
+
+- Age, Gender, and Alopecia appear to have a negative effect on the target class, while the remaining predictors show positive effect. For instance, the coefficient associated with Gender for males is *-3.6357* which means that the odds of being diagnosed diabetic positive is approximately 2.64% (exp(-3.6357)=0.0264) lower for male patients. 
+
+- The residual deviance of 122.09 on 335 degrees of freedom compared to the null deviance of 461.92 on 345 degrees of freedom signifies that the chosen model is better than a null model containing no predictors.
+
+
+
+
+# Model Assessment
+
+## Applying the fnal best model to the test data $D_2$
+
+```{r eval=T}
+# MAKING PREDICTION
+# =====================
+phat <- predict(best.fit, newdata = D2, type="response") # predicted probabilities
+cutoff <- 0.5
+yhat <- ifelse(phat <= cutoff, 1, 0)
+yobs <- D2$class
+table(yobs, yhat) # confusion matrix
+
+```
+
+- The confusion table shows that the predictions made on the test set resulted in high missclassifications.
+
+
+## Presenting ROC and AUC
+
+```{r}
+library(verification)
+a.ROC <- roc.area(obs=yobs, pred=phat)$A
+print(a.ROC) 
+
+library(cvAUC)
+AUC <- ci.cvAUC(predictions=phat, labels=yobs, folds=1:NROW(D2), confidence=0.95)
+auc.ci <- round(AUC$ci, digits=3) # confidence interval for cross-validated Area Under the ROC Curve
+mod.glm <- verify(obs=yobs, pred=phat)
+roc.plot(mod.glm, plot.thres = NULL)
+text(x=0.6, y=0.16, paste("Area under ROC =", round(AUC$cvAUC, digits=3), 
+	"with 95% CI (", auc.ci[1], ",", auc.ci[2], ").",
+	sep=" "), col="blue", cex=1.2)
+
+```
+
+The Area under the ROC curve is obtained as **`r round(AUC$cvAUC, digits=3)`**. With 95% confidence level, the ROC is estimated to lie between **`r auc.ci[1]`** and **`r auc.ci[2]`**. 
+
