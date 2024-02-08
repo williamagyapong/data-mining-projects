@@ -1,0 +1,611 @@
+---
+title: ' Project `r params$proj_number`: `r params$proj_title`' 
+subtitle: 'DS 5494 - Statistical Data Mining II'
+author: 
+  - Willliam Ofosu Agyapong^[woagyapong@miners.utep.edu]
+  - University of Texas at El Paso (UTEP) 
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  bookdown::pdf_document2:
+    fig_caption: true
+    latex_engine: xelatex
+    number_sections: true
+    toc: true
+    toc_depth: 4
+header-includes:
+  - \usepackage{amsmath}
+  - \usepackage{amssymb}
+  - \usepackage{amsfonts}
+  - \usepackage{amsthm}
+  - \usepackage{fancyhdr}
+  - \pagestyle{fancy}
+  - \fancyhf{}
+  - \rhead{William O. Agyapong}
+  - \lhead{Project `r params$proj_number` -- `r params$proj_title`}
+  - \cfoot{\thepage}
+  - \usepackage{algorithm}
+  - \usepackage[noend]{algpseudocode}
+geometry: margin = 0.8in
+fontsize: 10pt
+params:
+  proj_number: VI
+  proj_title: GAM, MARS, and PPR
+---
+
+```{r setup, include=FALSE}
+# Set global options for output rendering
+knitr::opts_chunk$set(eval = T, echo = T, warning = F, message = F, fig.pos = "H", out.extra = "", fig.align = "center")
+
+#----------------- Load required packages
+library(dplyr)
+library(ggthemes)
+library(ggplot2)
+library(tidyr)
+library(knitr)
+library(patchwork) # interface for laying out plots from ggplot2
+options(kableExtra.auto_format = F) # disable kableExtra automatic global options
+library(kableExtra)
+  
+#----------------- set the current working directory to this path
+setwd(dirname(rstudioapi::getSourceEditorContext()$path)) 
+
+#-----------------  Set default rounding to 4 decimal places
+options(digits = 4)
+
+#-----------------  Set default ggplot theme
+# theme_set(theme_fivethirtyeight())
+theme_set(theme_bw())
+
+```
+
+
+
+
+
+<!-- QUESTION ONE: WHAT --> 
+<!-- \noindent\rule{17.5cm}{0.8pt} -->
+
+\newpage
+
+
+# Introduction 
+
+
+In this project, we shall be considering various models including generalized additive models (GAM), multivariate adaptive regression splines (MARS), and projection pursuit regression (PPR). We aim, among other things, to **obtain a model with the best predictive power and also identify the important drivers of  employee turnover or retention.**
+
+We make use of a human resource data set concerning employee retention from one Kaggle data analytics competition. The data set contains 14,999 observations for 10 variables as shown in Table 1.
+
+## Data Description
+
+```{r}
+data.frame(
+    rbind(
+        c("satisfaction_level", "Satisfaction Level"),
+        c("last_evaluation","Last evaluation"),
+        c("number_project", "Number of projects"),
+        c("average_montly_hours", "Average monthly hours"),
+        c("time_spend_company  ", "Time spent at the company"),
+        c("Work_accident       ", "Whether they have had a work accident"),
+        c("left                ", "Whether the employee has left"),
+        c("promotion_last_5years", "Whether had a promotion in the last 5 years"),
+        c("sales               ", "Departments (column sales)"),
+        c("salary              ", "Salary")
+    )
+) %>%
+    kable(caption = "Varaibles and their meanings", booktabs = T,
+          col.names = c("Variable name", "Description")) %>%
+    kable_styling(latex_options = c("HOLD_position")) %>%
+    kable_classic()
+```
+
+- **For the left, work accident and promotion in last 5 years binary variables, 0 and 1 should be interpreted as "No" and "Yes", respectively**. 
+
+## Data Preparation
+
+```{r}
+# bring in the data
+hr <- read.csv("HR_comma_sep.csv")
+# dim(hr)
+# head(hr)
+# names(hr)
+
+# 1. change the categorical variable salary to ordinal
+# 2. change name for variable sales to department.
+# 3. make left variable a factor variable
+hr_new <- hr %>%
+    mutate(salary = factor(salary, levels = c("low","medium","high"),ordered = T),
+           left = as.factor(left)) %>%
+    rename(department = sales)
+
+# str(hr_new)
+```
+
+```{r}
+# get data types
+output <- NULL
+for(i in seq_along(hr_new)) {
+  output <- rbind(output, c(names(hr_new)[i],
+                  paste(class(hr_new[[i]]), collapse = " "),
+                  length(unique(hr_new[[i]]))
+                   )
+                  )
+}
+output <- as.data.frame(output)
+
+# checking for missing values
+output %>% left_join(
+naniar::miss_var_summary(hr_new), by=c("V1"="variable")) %>% 
+  kable(booktabs = T, linesep="", align = "lcc",
+        col.names = c("Variable name", "Type", "levels", "Number missing", "Percent missing"),
+        cap = "Data types and amount of missing values in the HR data") %>%
+kable_styling(latex_options = c("HOLD_position"))
+
+```
+
+**We do not have any missing values in the data.** 
+
+From the output above, it can be seen that among all the predictors, 2 are continuous, 5 variables are integer counts among which 3 (number_project, average_monthly_hours and time_spend_company) can be reasonably treated as continuous, while the other 2 together with department and salary will be treated as categorical variables. 
+
+
+# Explaratory Data Analysis (EDA)
+
+In this section, we explore the underlying data set with the hope of discovering any interesting patterns or insights to aid our understanding of the data. 
+
+```{r}
+# prepare data for EDA
+hr_eda <- hr_new %>%
+    mutate(left = as.factor(ifelse(left == 0, "No", "Yes")),
+           Work_accident = as.factor(ifelse(Work_accident == 0, "No", "Yes")),
+           promotion_last_5years = 
+               as.factor(ifelse(promotion_last_5years==0, "NO", "Yes")))
+```
+
+
+
+## Part (a): How does satisfaction level relate to number of projects?
+
+```{r fig.cap="Relationship between satisfaction level and the number of projects."}
+ggplot(hr_eda, aes(number_project, satisfaction_level, color=left)) + 
+    geom_point(alpha=0.7) + 
+    scale_color_brewer(palette = "Set1") +
+    labs(x="Number project", y="Satisfaction level",
+         title = "How does satisfaction level relate to number of projects?")
+```
+
+In general, we do not observe any clear increasing or decreasing patterns between satisfaction level and number of projects as either of them increases or decreases. That is, there does not appear to be a linear relationship between satisfaction level and the number of project. However, it is seen that satisfaction level decreased with increasing number of projects after the $5^{th}$ project only for employees who left, indicating some kind of effect between the two variables.
+
+As expected, employees who did not leave during the review period recorded the highest satisfaction levels. It turns out however that employees who worked on the most number of projects (7 projects) tend to have low satisfaction levels and all those workers also left the company.
+
+
+## Part (b): Association between variables
+
+Since the data contain different types of variables, both continuous and categorical, the Goodman and Kruskal tau measure was used to investigate the association among the variables instead of the pearson correlation. Another benefit of this association measure is that it is sensitive to directional associations. Applying the `GKtauDataframe()` function to the HR data set yielded the association plot shown below, which brings to the light some interesting details. 
+
+
+```{r GKtau-assocplot, fig.cap="Association between variables using the Goodman and Kruskal tau measure."}
+# install.packages("GoodmanKruskal")
+library(GoodmanKruskal)
+# data1<- diabetes %>% select(class)
+dat <- GKtauDataframe(hr_new)
+plot(dat, colorPlot=T)
+```
+
+We observe from the $6^{th}$ column in Figure \@ref(fig:GKtau-assocplot) that ***satisfaction level***, ***last evaluation***, ***number of projects***, ***average monthly hours***, and ***time spent at the company*** are moderately associated with employee turnover (left). The opposite is not true which confirms the asymmetric nature of the Goodman and Kruskal tau association values. This suggests that these variables have the ability to explain variation in employee turnover, a sign that such variables, especially satisfaction level and number of projects having the highest values of **0.53** and **0.36** respectively, are likely to be most influential in the modelling phase of the project.
+
+Generally, there is no high association among the predictors, suggesting that multicollinearity will not be an issue for us. It is interesting to note that only satisfaction level and number of projects show some association with a tau value of **0.18** measuring the influence of satisfaction level on the number of projects employees work on. Note that the strength of the association in the reverse case is weaker for these two variables.
+
+
+
+## Other findings
+
+### Distribution of Target variable
+
+```{r}
+library(scales)
+hr_eda %>%
+  group_by(left) %>%
+  summarise(n=n()) %>% 
+  mutate(pct = n/sum(n),
+         lbl = percent(pct)) %>%
+ggplot(aes(left, pct,fill=left)) +
+    geom_bar(stat = "identity",position = "dodge",alpha=0.7) +
+    scale_fill_brewer(palette = "Set1") +
+  geom_text(aes(label = lbl), size=3, color = "white",
+            position = position_stack(vjust = 0.5)) + 
+   labs(y="Percent", title = "") +
+    theme(legend.position = "none")
+```
+
+It can be observed that about 76% of employees stayed while 24% of employees left the company.
+
+
+
+### Distribution of continuous predictors by employee turnover
+
+
+
+```{r boxplots, fig.cap="Distribution of continuous predictors by employee turnover (left)"}
+hr_eda %>%
+    dplyr::select(-c(salary, department, Work_accident,promotion_last_5years)) %>%
+    pivot_longer(-left, names_to = "variable", values_to = "value") %>%
+    ggplot(aes(left, value, fill = left)) +
+    geom_boxplot(alpha=0.7) +
+    scale_fill_brewer(palette = "Set1") +
+    facet_wrap(vars(variable),  scales = "free") +
+    labs(x="", y="") +theme_bw() +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank())
+
+```
+From Figure \@ref(fig:boxplots), the following observations can be made:
+
+- Except for time spent at the company, there is high variability in the measures for employees who left the company during the period under consideration compared to those who remained as indicated by the sizes of the box plots.
+
+- On average, employees who left recorded higher values for average monthly working hours, last evaluation, and time spent at the company and low satisfaction levels. 
+
+- Older employees in the company have spent up to 10 years, suggesting that the company is relatively young. Employees who left the company typically spent about 4 years, while typical active employees have remained in the company for about 3 years.
+
+
+### Distribution of categorical predictors by employee turnover
+
+```{r dept-bar, fig.cap="Distribution of department by employee turnover (left)"}
+
+plt1 <- ggplot(data = hr_eda, aes(x = department, fill=left)) +
+  geom_bar(position = "dodge", alpha=0.7) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(x = "",y = "Number of employees",
+       title = "Department versus employee turnover") +
+  theme(axis.text.x = element_text(angle = 45),
+        legend.position = "right", plot.title = element_text(hjust = .5))
+
+
+plt2 <- ggplot(data = hr_eda, aes(x = salary, fill=left)) +
+  geom_bar(position = "dodge", alpha=0.7) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(x = "",  y = "Number of employees",
+       title = "Salary") + theme(legend.position = "none", plot.title = element_text(hjust = .5))
+
+plt3 <- ggplot(data = hr_eda, aes(x = factor(Work_accident), fill=left)) +
+  geom_bar(position = "dodge", alpha=0.7) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(x = "", y = "",
+       title = "Work accident") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = .5))
+
+plt4 <- ggplot(data = hr_eda, aes(x = factor(promotion_last_5years), fill=left)) +
+  geom_bar(position = "dodge", alpha=0.7) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(x = "", y = "",
+       title = "Promotion in last\n 5 years") +
+  theme(legend.position = "none", plot.title = element_text(hjust = .5))
+
+plt1
+
+```
+
+- Sales, technical, and support department were the top three departments to have employee turnover whiles the management department had the smallest amount of turnover. This could probably due to the fact that those three departments happen to have the largest number of employees.
+
+```{r cat-pred-bars, fig.cap="Distribution of other categorical predictors by employee turnover (left)"}
+(plt2 + plt3 + plt4)
+```
+
+Figure \@ref(fig:cat-pred-bars) suggests that:
+
+- Most employees receive low to medium salaries and the majority of employees who left the company belong to this same salary group, while few employees with high salaries left. This shows that salary levels have a high tendency to influence employee turnover.
+
+- Majority are the employees who have never had a work related accident.
+
+- Only a small proportion of employees got promoted in the last 5 years during the review period.
+
+
+# Data Partitioning: Randomly splitting data into training and test sets
+
+For the purpose of model validation, we randomly partitioned the data $D$ into the training set $D_1$ and the test set $D_2$ with a ratio of approximately 2:1 on the sample size. The output below shows that 9999 observations and 5000 observations were allocated to the resulting training and test sets, respectively. A ***9940*** seed was used to ensure reproducibility of results affected by random splitting of the data.
+
+```{r}
+set.seed(9940)
+ratio <- 2/3
+train_ind <- sample(1:NROW(hr_new), size = NROW(hr_new)*ratio) 
+train_set <- hr_new[train_ind, ]
+test_set <- hr_new[-train_ind, ]
+dim(train_set); dim(test_set)
+```
+
+
+# Logistic Regression: A baseline classifier
+
+
+A 10-fold cross validation regularized logistic regression model with LASSO penalty was fitted to the training set $D_1$.
+
+
+```{r}
+library(glmnet)
+# select target and create the design matrix
+y <- train_set$left
+X <- model.matrix(~ . -left, data = train_set)
+# fit the model
+set.seed(125)
+cv.lasso <- cv.glmnet(X, y, nfolds = 10, family="binomial", alpha=1, lambda.min=.0001,
+                      thresh = 1e-07, nlambda=500, standardize=T, maxit=2000, type.measure = "deviance")
+# best tuning parameter
+best.lambda <- cv.lasso$lambda.1se
+
+plot(cv.lasso)
+```
+
+
+The best tuning parameter $\lambda$ was obtained as `r best.lambda` based on the minimum cross-validated such that error is within 1 standard error of the minimum. From the graph above we observe that 13 terms are selected with this choice of $\lambda$.
+
+```{r}
+fit.lasso <- glmnet(x=X, y=y, family="binomial", alpha = 1, lambda=best.lambda, standardize = T, thresh = 1e-07, maxit=2000)
+fit.lasso$beta
+```
+
+Applying a zero (0) cutoff on the absolute values of the coefficients as a selection criterion, all 9 predictors will be retained in our final model. It is worthy to note that although the coefficient associated with some of the levels of `department` and `saalary` are zero (0), the nonzero ones justify their inclusion in the model. We therefore derive our final logistic regression model as follows:
+
+```{r}
+logistic <- glm(left ~ ., data = train_set, family = "binomial")
+
+# summary(logistic)
+
+logistic %>% broom::tidy(conf.int=T,conf.level=0.95) %>%
+    kable(booktabs=T, linesep="", caption = "Parameter estimates for the Logistic model")%>%
+    kable_styling(latex_options =c("HOLD_position"))
+```
+
+From the above table of results, there is enough evidence at 5% significance level to conclude that all the predictors are statistically significant in the model as evidenced by the small p-values. Even though most of the levels for the department variable did not show significance, we consider the whole variable to be significant.
+
+The sign of the coefficients show that most of the predictors including satisfaction level and number of projects have negative effect on turnover. From the odds table below, we learn that the estimated odds for satisfaction level is $e^{-4.1856} = 0.0152$, meaning for every unit increase in satisfaction level, the odds (likelihood) of an employee turnover decreases by a factor of 0.0152, holding all other factors constant. Similar interpretations can be made for the other variables.
+
+
+```{r eval=T, echo=T}
+exp(cbind(OR = coef(logistic), confint(logistic))) %>%
+    kable(booktabs=T, linesep="", caption = 
+    "Odds ratio based on parameter estimates from the logistic model") %>%
+    kable_styling(latex_options =c("HOLD_position"))
+```
+
+
+
+## Applying the fnal model to the test data and presenting the ROC curve
+
+```{r}
+library(verification)
+library(cvAUC)
+
+phat.logit <- predict(logistic, newdata = test_set, type="response") # predicted probabilities
+
+# a custom function for computing and plotting ROC curve
+roc_curve <- function (phat, main = "", col="blue", roc_val=F) {
+   yobs <- as.integer(as.character(test_set$left))
+   AUC <- ci.cvAUC(predictions=phat, labels=yobs, folds=1:NROW(test_set),
+                confidence=0.95)
+   
+   if(roc_val) return(AUC$cvAUC)
+   
+   auc.ci <- round(AUC$ci, digits=3) # confidence interval for cross-validated 
+                                     # Area Under the ROC Curve 
+   mod <- verify(obs=yobs, pred=phat)
+   roc.plot(mod, plot.thres = NULL, main=main)
+  text(x=0.6, y=0.16, paste("Area under ROC =", round(AUC$cvAUC, digits=3), 
+	"with 95% CI (", auc.ci[1], ",", auc.ci[2], ")",
+	sep=" "), col=col, cex=.9)
+}
+
+roc_curve(phat.logit, main="ROC curve for final logistic regression")
+```
+
+The Area under the ROC curve is obtained as **0.819**, which is indicative of a relatively good predictive performance. With 95% confidence level, the ROC is estimated to lie between **0.806** and **0.833**.
+
+
+# Random Forest (RF): Another baseline model
+
+```{r}
+ library(randomForest)
+fit.rf <- randomForest(left ~., data=train_set,importance=T, ntree=500)
+print(fit.rf)
+```
+
+## Partial dependence plots 
+
+```{r partial-rf, fig.cap="Partial dependence plots for continuous predictors"}
+# partial dependence plot
+par(mfrow=c(2,3))
+partialPlot(fit.rf, pred.data = train_set, x.var = satisfaction_level, rug = T,
+            main = "", xlab = "Satisfaction level")
+partialPlot(fit.rf, pred.data = train_set, x.var = number_project, rug = T,
+            main = "", xlab = "Number of projects")
+partialPlot(fit.rf, pred.data = train_set, x.var = last_evaluation, rug = T,
+            main = "", xlab = "Last evaluation")
+partialPlot(fit.rf, pred.data = train_set, x.var = time_spend_company, rug = T,
+            main = "", xlab = "Time spent")
+partialPlot(fit.rf, pred.data = train_set, x.var = average_montly_hours, rug = T,
+            main = "")
+```
+
+We observe strong non-linear patterns in all the plots in Figure \@ref(fig:partial-rf), which signifies that a linear model such as the logistic regression is not appropriate to model the relationship between employee turnover (left) and the variables indicated in the plots.
+
+## Variable importance rankings
+
+```{r}
+varImpPlot(fit.rf, main = "Variable importance ranking from RF", cex=0.89)
+```
+
+
+According to the mean decrease accuracy, the top four variables are `satisfaction level`, `number of projects`, `last evaluation`, and `average monthly hours`. Satisfaction level and number of projects happen to be the two most important determinants of employee turnover or retention. Based on the mean decrease GINI, satisfaction level remains the most influential variable.
+
+## ROC curve based on the predictions on the test set
+
+```{r}
+# get predicted probabilities
+phat.rf <- predict(fit.rf, newdata=test_set, type="prob")[, 2]
+# create ROC curve
+roc_curve(phat.rf, main="ROC curve for the RF model")
+```
+The AUC value of **0.992** shows that the random forest model has very high predictive performance for the problem at hand.
+
+
+# Generalized Additive Model (GAM)
+
+A stepwise selection procedure with AIC was employed to select the best fitting GAM model. The `scope` argument for the `step.Gam()` function allowed us to choose the smoothing parameters adaptively in the backfitting algorithm by specifying whether a term could either appear not at all, linearly, or as a smooth function estimated non-parametrically via smoothing splines or loess smoother.
+
+
+```{r}
+library(gam)
+# Create a GAM object for use in the stepwise selection. Note that the smoothing
+# terms will be specified later in the selection stage following.
+fit.gam <- gam( left ~ satisfaction_level + number_project + time_spend_company + 
+department + last_evaluation + average_montly_hours + Work_accident + 
+    promotion_last_5years + salary , family = binomial,
+    data=train_set, trace=T, control = gam.control(epsilon=1e-04, bf.epsilon = 1e-04,
+                                                   maxit=50, bf.maxit = 50)) 
+
+#--- perform a stepwise selection
+# register parallel backend for paralel execution
+require(doMC)
+registerDoMC(cores = (detectCores()-8))
+fit.step.gam <- step.Gam(fit.gam, scope=list(
+    "satisfaction_level"=~1 + satisfaction_level + lo(satisfaction_level) +
+        s(satisfaction_level),
+	"last_evaluation"=~1+ last_evaluation + lo(last_evaluation)+ s(last_evaluation), 
+	"number_project"=~1 + number_project + lo(number_project) + s(number_project),
+	"average_montly_hours"=~1 + average_montly_hours + lo(average_montly_hours) +
+        s(average_montly_hours),
+	"time_spend_company"=~1 + time_spend_company + lo(time_spend_company) + 
+        s(time_spend_company)),
+			scale =2, steps=1000, parallel=T, direction="both", trace = F)
+
+summary(fit.step.gam)
+
+```
+
+
+The results from the anova for nonparametric effects' table indicate that the loess smoother is appropriate for the nonparametric smoothing terms in `number of projects`. On the other hand, smoothing splines were chosen for `satisfaction level`, `last evaluation`, `average monthly hours`, and `time spent at the company` as the best smoothing functions with 3 degrees of freedom for each term.
+
+
+## ROC curve based on predictions on the test set
+
+```{r}
+# get predicted probabilities
+phat.gam <- predict(fit.step.gam, newdata=test_set, type="response", se.fit=F)
+roc_curve(phat.gam, main="ROC curve for the best GAM model")
+```
+From the plot, with AUC value of **0.957**, we notice that the final GAM model obtained performed well predicting the probability of an employee leaving or remaining in the company on the test data.
+
+
+## Plots of the functional forms for continuous predictors
+
+```{r}
+par(mfrow=c(2,3))
+plot(fit.step.gam, se=T)
+```
+
+The functional forms for the continuous predictors show non-linear relationships, indicating the inadequacy of linear models for our classification problem.
+
+
+# Multivariate Adaptive Regression Splines (MARS)
+
+We allowed maximum degree of interactions up to 3 by setting  `degree` to 3.
+
+```{r}
+library(earth)
+
+fit.mars <- earth(left ~ ., data=train_set, degree=3, 
+                  glm=list(family=binomial(link = "logit")))
+fit.mars
+
+
+summary(fit.mars) %>% .$coefficients %>% head(10)
+```
+
+
+
+## Variable importance ranking
+
+
+
+```{r mars, fig.cap="Variable importance based on impact to GCV as predictors are added to the model"}
+library(vip)
+# generating variable importance plot
+vip(fit.mars, num_features = 10, aesthetics = list(fill="dodgerblue",
+                                                   color="dodgerblue")) +
+    ggtitle("Variable importance (GCV) ranking from MARS") +
+    scale_fill_brewer(palette = "Set1") +
+    theme(plot.title = element_text(hjust = .5))
+```
+           
+We see here that the top four important variables include `satisfaction level` and `number of projects`, `time spent at the company`, and `last evaluation`, signifying that these variables played major role in predicting employee turnover or retention on the test data. Once again, the satisfaction level and number of projects are the top two most important variables.  
+
+## Partial dependence plots
+
+```{r}
+library(pdp)
+# partial dependence plot
+(partial(fit.mars, pred.var = "satisfaction_level", grid.resolution = 10)%>%autoplot() +
+partial(fit.mars, pred.var = "number_project", grid.resolution = 10)%>%autoplot()) /
+(partial(fit.mars, pred.var = "last_evaluation", grid.resolution = 10)%>%autoplot() +
+partial(fit.mars, pred.var = "time_spend_company", grid.resolution = 10)%>%autoplot())
+```
+These plots help us to assess the marginal effect of each variable on predicting employee turnover. For example, higher satisfaction levels and time spent have negative effect on the the likelihood of employee turnover.
+
+```{r}
+#  get predicted probabilities
+phat.mars <- predict(fit.mars, newdata=test_set, type="response")
+# create ROC curve
+roc_curve(phat.mars, main="ROC curve from the best MARS model")
+```
+With AUC of **0.978**, it is clear that the MARS model performed well predicting the likelihood of employee turnover on the the test data.
+
+# Projection Pursuit Regression
+
+```{r}
+train_set2 <- train_set %>%
+    mutate(left = as.integer(as.character(left)))
+
+fit.ppr <- ppr(left ~ ., sm.method = "supsmu", 
+    data = train_set2, nterms = 2, max.terms = 12, bass=3)
+
+# summary(fit.ppr)
+
+fit2.ppr <- update(fit.ppr, bass=5, nterms=4)
+
+summary(fit2.ppr)
+```
+
+## ROC curve based on predictions on the test set
+
+```{r}
+#  get predicted probabilities
+phat.ppr <- predict(fit2.ppr, newdata=test_set)
+phat.ppr <- scale(phat.ppr,center = min(phat.ppr),
+                  scale = max(phat.ppr)-min(phat.ppr))
+# create ROC curve
+roc_curve(phat.ppr, main="ROC curve from the PPR model")
+```
+
+The AUC obtained based on the PPR model is **0.972**, showing a better predictive performance.
+
+# Summary of results
+
+```{r}
+roc_values <- c(roc_curve(phat.logit, roc_val = T),
+                roc_curve(phat.rf, roc_val = T),
+                roc_curve(phat.gam, roc_val = T),
+                roc_curve(phat.mars, roc_val = T),
+                roc_curve(phat.ppr, roc_val = T)
+                )
+
+data.frame("Model"= c("Logistic (LASSO)","Random Forest","GAM","MARS","PPR"), "AUC"= roc_values) %>%
+ kable(booktabs=T, align = "lc")%>%
+    kable_styling(latex_options =c("HOLD_position"))
+```
+        
+Among all the five supervised learning approaches considered, the random forest (RF) model yielded the best predictive performance since it provides the largest AUC value for determining the likelihood of employee turnover or retention in the company. However, among GAM, MARS, and PPR, MARS is the best performing model followed closely by PPR.  The regularized logistic regression model performed poorly relative to the other methods in terms of predictive performance, however, it must be noted that its results are highly interpretable compared to the others. For instance, using the odds ratios obtained from the logistic coefficients, we can explain how exactly a particular predictor influences employee retention.
+
+Overall, satisfaction level and number of projects emerged as the top two variables that predict an employee's turnover or retention.  Therefore, it is recommended that  employers take these factors seriously into account in their bid to reducing turnover rate or improving retention.
+
+
+
+
+
